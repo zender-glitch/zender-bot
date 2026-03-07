@@ -1,6 +1,6 @@
 """
 ZENDER COMMANDER TERMINAL — Telegram Bot
-Этап 1: базовый бот с командами и inline-кнопками
+Этап 1 + 2: бот с командами, inline-кнопками + фоновый сборщик данных
 """
 
 import asyncio
@@ -15,6 +15,7 @@ from aiogram.enums import ParseMode
 
 from config import BOT_TOKEN
 from database import db
+from collector import collector_loop
 
 # ── Логирование ───────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -119,8 +120,7 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
 def text_summary(user_coins: list[str], data: dict) -> str:
     """
     Компактная сводка по монетам.
-    data — словарь {COIN: {price, change, signal, signal_text}}
-    Пока данных нет — показываем заглушку.
+    data — словарь {COIN: {price, change, signal, label}}
     """
     lines = ["<b>ВАШИ МОНЕТЫ</b> · обновляется каждые 15 мин\n"]
     lines.append("<code>")
@@ -141,7 +141,6 @@ def text_summary(user_coins: list[str], data: dict) -> str:
 def text_coin_analysis(coin: str, data: dict) -> str:
     """
     Полный анализ одной монеты.
-    Пока API не подключены — показываем шаблон.
     """
     d = data.get(coin, {})
     price  = d.get("price",       "загружается...")
@@ -152,6 +151,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     short_p= d.get("short_pct",   "—")
     oi     = d.get("oi",          "—")
     oi_chg = d.get("oi_change",   "—")
+    fr     = d.get("funding_rate","—")
     liq_up = d.get("liq_up",      "—")
     liq_dn = d.get("liq_dn",      "—")
     exflow = d.get("exchange_flow","—")
@@ -161,8 +161,8 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     fg     = d.get("fear_greed",  "—")
     fg_lbl = d.get("fear_greed_label", "—")
     signal = d.get("signal",      "░░░░░")
-    sig_lbl= d.get("signal_label","нет данных")
-    llm    = d.get("llm_text",    "Анализ появится после подключения API данных.")
+    sig_lbl= d.get("signal_label", d.get("label", "нет данных"))
+    llm    = d.get("llm_text",    "Анализ появится после подключения LLM (Этап 5).")
     rec    = d.get("recommendation", "")
 
     text = f"""<b>⚡ ZENDER COMMANDER TERMINAL</b>
@@ -175,6 +175,9 @@ def text_coin_analysis(coin: str, data: dict) -> str:
 
 ОТКРЫТЫЙ ИНТЕРЕС
 {oi}   {oi_chg} за 4 часа
+
+КОМИССИЯ ЗА УДЕРЖАНИЕ
+{fr}
 
 ЗОНЫ ЛИКВИДАЦИЙ
 ↑  позиций на падение  {liq_up}
@@ -383,6 +386,10 @@ async def cb_back_main(call: CallbackQuery):
 
 async def main():
     log.info("⚡ Zender Commander Terminal Bot — starting...")
+
+    # Запускаем фоновый сборщик данных (каждые 15 мин)
+    asyncio.create_task(collector_loop(interval_minutes=15))
+
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
