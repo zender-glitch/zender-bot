@@ -208,12 +208,12 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         f"<code>{coin} / USDT          {price}   {arrow} {change}</code>",
     ]
 
-    # ── ПОЗИЦИИ (buy/sell ratio) ──
+    # ── ПОКУПКИ / ПРОДАЖИ (taker buy/sell ratio) ──
     if _has(long_p) or _has(short_p):
         lines.append("")
-        lines.append("<b>ПОЗИЦИИ</b>")
-        lines.append(f"<code>ставят на рост     {long_v:<14}{long_p}</code>")
-        lines.append(f"<code>ставят на падение  {short_v:<14}{short_p}</code>")
+        lines.append("<b>ПОКУПКИ / ПРОДАЖИ (4ч)</b>")
+        lines.append(f"<code>покупают            {long_p}</code>")
+        lines.append(f"<code>продают             {short_p}</code>")
 
     # ── ОТКРЫТЫЙ ИНТЕРЕС ──
     if _has(oi):
