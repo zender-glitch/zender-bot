@@ -45,7 +45,7 @@ def fmt_pct(val):
 
 
 async def cg_get(path, params=None):
-    """Запрос к Coinglass API"""
+    """Запрос к Coinglass API с логированием ответа при ошибке"""
     url = f"{CG_BASE}{path}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -85,9 +85,10 @@ async def fetch_price_history():
 
 
 async def fetch_oi_history():
-    """Исторический OI (OHLC)"""
+    """Исторический OI — camelCase эндпоинты Coinglass v4"""
     print("📊 Загружаем OI history...")
-    data = await cg_get("/api/futures/open-interest/ohlc-history", {
+    # Основной эндпоинт (camelCase!)
+    data = await cg_get("/api/futures/openInterest/ohlc-history", {
         "symbol": SYMBOL,
         "interval": "1d",
         "limit": DAYS + 1,
@@ -95,8 +96,8 @@ async def fetch_oi_history():
     if data and isinstance(data, list):
         print(f"  ✅ Получено {len(data)} записей OI")
         return data
-    # Пробуем альтернативный эндпоинт
-    data = await cg_get("/api/futures/open-interest/ohlc-aggregated-history", {
+    # Альтернативный — aggregated
+    data = await cg_get("/api/futures/openInterest/ohlc-aggregated-history", {
         "symbol": SYMBOL,
         "interval": "1d",
         "limit": DAYS + 1,
@@ -109,9 +110,9 @@ async def fetch_oi_history():
 
 
 async def fetch_fr_history():
-    """Исторический Funding Rate (OHLC)"""
+    """Исторический Funding Rate — camelCase"""
     print("💰 Загружаем FR history...")
-    data = await cg_get("/api/futures/funding-rate/ohlc-history", {
+    data = await cg_get("/api/futures/fundingRate/ohlc-history", {
         "symbol": SYMBOL,
         "interval": "1d",
         "limit": DAYS + 1,
@@ -119,14 +120,24 @@ async def fetch_fr_history():
     if data and isinstance(data, list):
         print(f"  ✅ Получено {len(data)} записей FR")
         return data
+    # Альтернативный — OI-weighted
+    data = await cg_get("/api/futures/fundingRate/oi-weight-ohlc-history", {
+        "symbol": SYMBOL,
+        "interval": "1d",
+        "limit": DAYS + 1,
+    })
+    if data and isinstance(data, list):
+        print(f"  ✅ Получено {len(data)} записей FR (oi-weight)")
+        return data
     print("  ⚠️ FR history недоступен")
     return []
 
 
 async def fetch_liquidation_history():
-    """Исторические ликвидации"""
+    """Исторические ликвидации — camelCase"""
     print("💥 Загружаем ликвидации history...")
-    data = await cg_get("/api/futures/liquidation/aggregated-ohlc-history", {
+    # aggregated-history (не ohlc!)
+    data = await cg_get("/api/futures/liquidation/aggregated-history", {
         "symbol": SYMBOL,
         "interval": "1d",
         "limit": DAYS + 1,
@@ -134,23 +145,24 @@ async def fetch_liquidation_history():
     if data and isinstance(data, list):
         print(f"  ✅ Получено {len(data)} записей ликвидаций")
         return data
-    # Пробуем другой эндпоинт
-    data = await cg_get("/api/futures/liquidation/ohlc-history", {
+    # Пробуем с exchange
+    data = await cg_get("/api/futures/liquidation/history", {
         "symbol": SYMBOL,
         "interval": "1d",
         "limit": DAYS + 1,
     })
     if data and isinstance(data, list):
-        print(f"  ✅ Получено {len(data)} записей ликвидаций (ohlc)")
+        print(f"  ✅ Получено {len(data)} записей ликвидаций (history)")
         return data
     print("  ⚠️ Liquidation history недоступен")
     return []
 
 
 async def fetch_ls_history():
-    """Исторический Long/Short ratio"""
+    """Исторический Long/Short ratio — camelCase"""
     print("📐 Загружаем L/S history...")
-    data = await cg_get("/api/futures/global-long-short-account-ratio/history", {
+    # globalLongShortAccountRatio (camelCase!)
+    data = await cg_get("/api/futures/globalLongShortAccountRatio/history", {
         "symbol": SYMBOL,
         "interval": "1d",
         "limit": DAYS + 1,
@@ -158,8 +170,17 @@ async def fetch_ls_history():
     if data and isinstance(data, list):
         print(f"  ✅ Получено {len(data)} записей L/S")
         return data
+    # Пробуем top account ratio
+    data = await cg_get("/api/futures/topLongShortAccountRatio/history", {
+        "symbol": SYMBOL,
+        "interval": "1d",
+        "limit": DAYS + 1,
+    })
+    if data and isinstance(data, list):
+        print(f"  ✅ Получено {len(data)} записей L/S (top account)")
+        return data
     # Пробуем taker buy/sell history
-    data = await cg_get("/api/futures/taker-buy-sell-volume/ohlc-history", {
+    data = await cg_get("/api/futures/aggregatedTakerBuySellVolume/history", {
         "symbol": SYMBOL,
         "interval": "1d",
         "limit": DAYS + 1,
@@ -280,21 +301,21 @@ async def run_backtest():
         # OI
         if oi_hist:
             for item in oi_hist:
-                ts = item.get("t") or item.get("time") or item.get("timestamp")
+                ts = item.get("t") or item.get("time") or item.get("timestamp") or item.get("createTime")
                 if ts:
                     item_date = datetime.fromtimestamp(ts / 1000 if ts > 1e10 else ts).strftime("%Y-%m-%d")
                     if item_date == date:
-                        oi_val = item.get("c") or item.get("close") or item.get("open_interest")
+                        oi_val = item.get("c") or item.get("close") or item.get("openInterest") or item.get("open_interest")
                         break
 
         # FR
         if fr_hist:
             for item in fr_hist:
-                ts = item.get("t") or item.get("time") or item.get("timestamp")
+                ts = item.get("t") or item.get("time") or item.get("timestamp") or item.get("createTime")
                 if ts:
                     item_date = datetime.fromtimestamp(ts / 1000 if ts > 1e10 else ts).strftime("%Y-%m-%d")
                     if item_date == date:
-                        fr_val = item.get("c") or item.get("close") or item.get("funding_rate")
+                        fr_val = item.get("c") or item.get("close") or item.get("fundingRate") or item.get("funding_rate")
                         if fr_val:
                             fr_val = float(fr_val) * 100
                         break
@@ -302,23 +323,23 @@ async def run_backtest():
         # Liquidations
         if liq_hist:
             for item in liq_hist:
-                ts = item.get("t") or item.get("time") or item.get("timestamp")
+                ts = item.get("t") or item.get("time") or item.get("timestamp") or item.get("createTime")
                 if ts:
                     item_date = datetime.fromtimestamp(ts / 1000 if ts > 1e10 else ts).strftime("%Y-%m-%d")
                     if item_date == date:
-                        liq_long = item.get("long_volUsd") or item.get("longVolUsd") or item.get("long_liquidation_usd")
-                        liq_short = item.get("short_volUsd") or item.get("shortVolUsd") or item.get("short_liquidation_usd")
+                        liq_long = item.get("longVolUsd") or item.get("long_volUsd") or item.get("longLiquidationUsd") or item.get("long_liquidation_usd")
+                        liq_short = item.get("shortVolUsd") or item.get("short_volUsd") or item.get("shortLiquidationUsd") or item.get("short_liquidation_usd")
                         break
 
         # L/S
         if ls_hist:
             for item in ls_hist:
-                ts = item.get("t") or item.get("time") or item.get("timestamp")
+                ts = item.get("t") or item.get("time") or item.get("timestamp") or item.get("createTime")
                 if ts:
                     item_date = datetime.fromtimestamp(ts / 1000 if ts > 1e10 else ts).strftime("%Y-%m-%d")
                     if item_date == date:
-                        long_pct = item.get("long_ratio") or item.get("longRatio") or item.get("buy_ratio")
-                        short_pct = item.get("short_ratio") or item.get("shortRatio") or item.get("sell_ratio")
+                        long_pct = item.get("longRatio") or item.get("long_ratio") or item.get("buyRatio") or item.get("buy_ratio") or item.get("longAccount")
+                        short_pct = item.get("shortRatio") or item.get("short_ratio") or item.get("sellRatio") or item.get("sell_ratio") or item.get("shortAccount")
                         break
 
         # Fear & Greed
