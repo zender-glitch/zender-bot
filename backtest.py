@@ -361,7 +361,7 @@ async def run_backtest():
         print(f"  {icon} {'Верно' if correct else ('Неверно' if correct is False else 'Нейтрально')}")
         print()
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(3)  # 3 сек между запросами — не упираться в rate limit
 
     # ── Итоги ──
     print("=" * 60)
