@@ -122,7 +122,7 @@ async def cg_get(path: str, params: dict = None) -> dict | list | None:
                 if str(body_code) == "429":
                     log.warning(f"CG rate limit {path}")
                 elif str(body_code) == "403":
-                    log.debug(f"CG 403 (план) {path}")
+                    log.warning(f"CG 403 (план не поддерживает) {path}")
                 else:
                     log.warning(f"CG code={body_code} {path}: {msg}")
                 return None
@@ -349,7 +349,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
                 "https://api.anthropic.com/v1/messages",
                 headers={
                     "x-api-key": ANTHROPIC_KEY,
-                    "anthropic-version": "2024-10-22",
+                    "anthropic-version": "2023-06-01",
                     "content-type": "application/json",
                 },
                 json={
