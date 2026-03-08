@@ -1,6 +1,6 @@
 """
 ZENDER COMMANDER TERMINAL — Telegram Bot
-Этап 1-2: бот с командами, inline-кнопками + запуск коллектора данных.
+Этап 1-2-5: бот с командами, inline-кнопками + коллектор + LLM-анализ.
 """
 
 import asyncio
@@ -127,6 +127,14 @@ def _arrow(change_str: str) -> str:
     return "→"
 
 
+def _has(val) -> bool:
+    """Проверка что значение не пустое / не заглушка"""
+    if val is None:
+        return False
+    s = str(val).strip()
+    return s != "" and s != "—" and s != "0"
+
+
 def text_summary(user_coins: list[str], data: dict) -> str:
     """
     Компактная сводка по монетам — эталонный формат.
@@ -160,8 +168,10 @@ def text_summary(user_coins: list[str], data: dict) -> str:
 def text_coin_analysis(coin: str, data: dict) -> str:
     """
     Полный анализ одной монеты — эталонный формат.
-    Показываем только секции с реальными данными (не "—").
-    Секции без данных (киты, биржевой поток) скрываются.
+    Показываем только секции с реальными данными.
+    Секции без данных скрываются.
+    + LLM-анализ, рекомендация, зоны покупки/продажи
+    + Общие рыночные ликвидации рядом с ликвидациями монеты
     """
     d = data.get(coin, {})
     price   = d.get("price",       "—")
@@ -175,10 +185,18 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     fr      = d.get("funding_rate","—")
     liq_up  = d.get("liq_up",      "—")
     liq_dn  = d.get("liq_dn",      "—")
+    mkt_liq_long  = d.get("mkt_liq_long",  "—")
+    mkt_liq_short = d.get("mkt_liq_short", "—")
     fg      = d.get("fear_greed",  "—")
     fg_lbl  = d.get("fear_greed_label", "—")
     signal  = d.get("signal",      "░░░░░")
     sig_lbl = d.get("signal_label","—")
+
+    # LLM данные
+    llm_text       = d.get("llm_text",        "")
+    recommendation = d.get("recommendation",   "")
+    buy_zone       = d.get("buy_zone",         "")
+    sell_zone      = d.get("sell_zone",        "")
 
     arrow = _arrow(change)
 
@@ -191,33 +209,41 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     ]
 
     # ── ПОЗИЦИИ (buy/sell ratio) ──
-    if long_p != "—" or short_p != "—":
+    if _has(long_p) or _has(short_p):
         lines.append("")
         lines.append("<b>ПОЗИЦИИ</b>")
         lines.append(f"<code>ставят на рост     {long_v:<14}{long_p}</code>")
         lines.append(f"<code>ставят на падение  {short_v:<14}{short_p}</code>")
 
     # ── ОТКРЫТЫЙ ИНТЕРЕС ──
-    if oi != "—":
+    if _has(oi):
         lines.append("")
         lines.append("<b>ОТКРЫТЫЙ ИНТЕРЕС</b>")
         lines.append(f"<code>{oi}   {oi_chg} за 4 часа</code>")
 
     # ── КОМИССИЯ ЗА УДЕРЖАНИЕ (Funding Rate) ──
-    if fr != "—":
+    if _has(fr):
         lines.append("")
         lines.append("<b>КОМИССИЯ ЗА УДЕРЖАНИЕ</b>")
         lines.append(f"<code>{fr}</code>")
 
-    # ── ЛИКВИДАЦИИ ──
-    if liq_up != "—" or liq_dn != "—":
+    # ── ЛИКВИДАЦИИ (монета + рынок) ──
+    has_coin_liq = _has(liq_up) or _has(liq_dn)
+    has_mkt_liq  = _has(mkt_liq_long) or _has(mkt_liq_short)
+    if has_coin_liq or has_mkt_liq:
         lines.append("")
         lines.append("<b>ЛИКВИДАЦИИ (4ч)</b>")
-        lines.append(f"<code>↑  позиций на падение  {liq_up}</code>")
-        lines.append(f"<code>↓  позиций на рост     {liq_dn}</code>")
+        if has_coin_liq:
+            lines.append(f"<code>  {coin}:</code>")
+            lines.append(f"<code>  ↑ шорты (на падение)  {liq_up}</code>")
+            lines.append(f"<code>  ↓ лонги (на рост)     {liq_dn}</code>")
+        if has_mkt_liq:
+            lines.append(f"<code>  РЫНОК (все монеты):</code>")
+            lines.append(f"<code>  ↑ шорты (на падение)  {mkt_liq_short}</code>")
+            lines.append(f"<code>  ↓ лонги (на рост)     {mkt_liq_long}</code>")
 
     # ── НАСТРОЕНИЕ ──
-    if fg != "—":
+    if _has(fg):
         lines.append("")
         lines.append("<b>НАСТРОЕНИЕ</b>")
         lines.append(f"<code>страх/жадность   {fg} — {fg_lbl}</code>")
@@ -227,6 +253,31 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     lines.append("<code>──────────────────────────────────</code>")
     lines.append(f"<code>СИГНАЛ   {signal}   {sig_lbl}</code>")
     lines.append("<code>──────────────────────────────────</code>")
+
+    # ── LLM-АНАЛИЗ ──
+    if llm_text:
+        lines.append("")
+        lines.append(f"🤖 <b>AI-АНАЛИЗ</b>")
+        lines.append(f"{llm_text}")
+
+    # ── РЕКОМЕНДАЦИЯ + ЗОНЫ ──
+    if recommendation:
+        rec_upper = recommendation.upper()
+        if "ПОКУПАТЬ" in rec_upper:
+            rec_icon = "🟢"
+        elif "ПРОДАВАТЬ" in rec_upper:
+            rec_icon = "🔴"
+        else:
+            rec_icon = "🟡"
+        lines.append("")
+        lines.append(f"{rec_icon} <b>РЕКОМЕНДАЦИЯ:</b> {recommendation}")
+
+    if buy_zone or sell_zone:
+        lines.append("")
+        if buy_zone:
+            lines.append(f"<code>🟢 Зона покупки:  {buy_zone}</code>")
+        if sell_zone:
+            lines.append(f"<code>🔴 Зона продажи:  {sell_zone}</code>")
 
     lines.append("")
     lines.append("⚡ <b>Zender Commander Terminal</b> · t.me/ZenderCommander_bot")

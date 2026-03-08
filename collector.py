@@ -1,10 +1,10 @@
 """
 ZENDER COMMANDER TERMINAL — Data Collector
-Этап 2: сбор данных из Coinglass API v4 + Fear & Greed Index
+Этап 2+5: сбор данных + LLM-анализ (Claude API)
 Запускается по расписанию, кладёт данные в Supabase.
 
 ПЛАН: Hobbyist (80+ endpoints, 30 req/min).
-Оптимизировано: 4 запроса на монету, задержки между монетами.
+Оптимизировано: 3 общих + 3 на монету, задержки между монетами.
 """
 
 import asyncio
@@ -13,6 +13,15 @@ import httpx
 from datetime import datetime, timezone
 
 from config import COINGLASS_API_KEY
+
+# Anthropic API (для LLM-анализа)
+try:
+    from config import ANTHROPIC_KEY
+    HAS_ANTHROPIC = bool(ANTHROPIC_KEY)
+except (ImportError, AttributeError):
+    ANTHROPIC_KEY = None
+    HAS_ANTHROPIC = False
+
 from database import db
 
 log = logging.getLogger(__name__)
@@ -27,7 +36,7 @@ CG_HEADERS = {
 # Монеты для сбора данных
 COINS = ["BTC", "ETH", "SOL", "BNB", "AVAX"]
 
-# CoinGecko IDs (для цен, т.к. Binance блокирует US серверы Railway)
+# CoinGecko IDs
 COINGECKO_IDS = {
     "BTC": "bitcoin",
     "ETH": "ethereum",
@@ -42,7 +51,6 @@ COINGECKO_IDS = {
 # ══════════════════════════════════════════════════════════════════════════════
 
 def fmt_usd(value, compact=True):
-    """Форматирование суммы в доллары: $1.23M, $4.56B"""
     if value is None:
         return "—"
     try:
@@ -60,7 +68,6 @@ def fmt_usd(value, compact=True):
 
 
 def fmt_pct(value):
-    """Форматирование процентов: +4.1%"""
     if value is None:
         return "—"
     try:
@@ -72,7 +79,6 @@ def fmt_pct(value):
 
 
 def fmt_fr(value):
-    """Форматирование funding rate с 4 знаками: +0.0045%"""
     if value is None:
         return "—"
     try:
@@ -84,7 +90,6 @@ def fmt_fr(value):
 
 
 def fmt_price(value):
-    """Форматирование цены: $83,420"""
     if value is None:
         return "—"
     try:
@@ -104,7 +109,6 @@ def fmt_price(value):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def cg_get(path: str, params: dict = None) -> dict | list | None:
-    """GET запрос к Coinglass API v4. Возвращает data из ответа."""
     url = f"{CG_BASE}{path}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -112,7 +116,6 @@ async def cg_get(path: str, params: dict = None) -> dict | list | None:
             resp.raise_for_status()
             body = resp.json()
 
-            # Проверяем код ответа в теле JSON (API возвращает HTTP 200 даже при ошибках)
             body_code = body.get("code")
             if body_code is not None and str(body_code) != "0":
                 msg = body.get("msg", "unknown")
@@ -138,24 +141,15 @@ async def cg_get(path: str, params: dict = None) -> dict | list | None:
 
 
 async def fetch_prices() -> dict:
-    """
-    Цены всех монет через CoinGecko (бесплатно, без ключа).
-    Возвращает: {BTC: {price, change_24h}, ETH: {...}, ...}
-    """
     ids = ",".join(COINGECKO_IDS.values())
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
                 "https://api.coingecko.com/api/v3/simple/price",
-                params={
-                    "ids": ids,
-                    "vs_currencies": "usd",
-                    "include_24hr_change": "true",
-                }
+                params={"ids": ids, "vs_currencies": "usd", "include_24hr_change": "true"}
             )
             resp.raise_for_status()
             data = resp.json()
-
             result = {}
             for symbol, gecko_id in COINGECKO_IDS.items():
                 if gecko_id in data:
@@ -170,11 +164,6 @@ async def fetch_prices() -> dict:
 
 
 async def fetch_open_interest(symbol: str) -> dict:
-    """
-    Открытый интерес по всем биржам.
-    Поля: open_interest_usd, open_interest_change_percent_4h/24h
-    Ищем exchange='All' для агрегата.
-    """
     data = await cg_get("/api/futures/open-interest/exchange-list", {"symbol": symbol})
     if not data:
         return {}
@@ -206,10 +195,6 @@ async def fetch_open_interest(symbol: str) -> dict:
 
 
 async def fetch_funding_rate(symbol: str) -> dict:
-    """
-    Funding Rate по биржам.
-    Данные вложены: stablecoin_margin_list[].funding_rate + token_margin_list[].funding_rate
-    """
     data = await cg_get("/api/futures/funding-rate/exchange-list", {"symbol": symbol})
     if not data:
         return {}
@@ -226,7 +211,6 @@ async def fetch_funding_rate(symbol: str) -> dict:
                 rates.append(float(fr))
             except (ValueError, TypeError):
                 pass
-
     for entry in item.get("token_margin_list", []):
         fr = entry.get("funding_rate")
         if fr is not None:
@@ -239,28 +223,17 @@ async def fetch_funding_rate(symbol: str) -> dict:
         return {}
 
     avg_rate = sum(rates) / len(rates)
-    # API отдаёт в десятичной форме (-0.002744 = -0.27%), умножаем на 100
     return {"funding_rate": avg_rate * 100}
 
 
 async def fetch_long_short(symbol: str) -> dict:
-    """
-    Taker Buy/Sell Volume — соотношение покупок/продаж.
-    Используем как замену L/S ratio (который требует Startup план).
-    Требует параметр range: 1h, 4h, 12h, 24h.
-    """
-    # Пробуем разные значения range
-    for range_val in ["4h", "24h", "1h", "12h"]:
-        data = await cg_get("/api/futures/taker-buy-sell-volume/exchange-list", {
-            "symbol": symbol,
-            "range": range_val,
-        })
-        if data is not None:
-            break
-    else:
+    data = await cg_get("/api/futures/taker-buy-sell-volume/exchange-list", {
+        "symbol": symbol,
+        "range": "4h",
+    })
+    if data is None:
         return {}
 
-    # Ищем агрегат по всем биржам
     target = None
     if isinstance(data, list):
         for item in data:
@@ -275,125 +248,22 @@ async def fetch_long_short(symbol: str) -> dict:
     if not target:
         return {}
 
-    # DEBUG для BTC: логируем поля один раз
-    if symbol == "BTC":
-        log.info(f"  TAKER keys: {list(target.keys())}")
-        sample = {k: target[k] for k in list(target.keys())[:12]}
-        log.info(f"  TAKER sample: {sample}")
+    buy = target.get("buy_ratio")
+    sell = target.get("sell_ratio")
 
-    # Пробуем разные имена полей для buy/sell ratio
-    buy = None
-    sell = None
-
-    # Вариант 1: прямые ratio
-    for key in ["buy_ratio", "buyRatio", "buy_vol_rate", "buyVolRate", "taker_buy_ratio"]:
-        val = target.get(key)
-        if val is not None:
-            try:
-                buy = float(val)
-                break
-            except (ValueError, TypeError):
-                pass
-
-    for key in ["sell_ratio", "sellRatio", "sell_vol_rate", "sellVolRate", "taker_sell_ratio"]:
-        val = target.get(key)
-        if val is not None:
-            try:
-                sell = float(val)
-                break
-            except (ValueError, TypeError):
-                pass
-
-    if buy is not None and sell is not None and (buy > 0 or sell > 0):
-        if buy <= 1 and sell <= 1:
-            return {"long_pct": round(buy * 100, 1), "short_pct": round(sell * 100, 1)}
-        else:
-            return {"long_pct": round(buy, 1), "short_pct": round(sell, 1)}
-
-    # Вариант 2: объёмы → вычисляем ratio
-    buy_vol = None
-    sell_vol = None
-
-    for key in ["buy_vol_usd", "buyVolUsd", "taker_buy_vol_usd", "takerBuyVolUsd", "buy"]:
-        val = target.get(key)
-        if val is not None:
-            try:
-                buy_vol = float(val)
-                break
-            except (ValueError, TypeError):
-                pass
-
-    for key in ["sell_vol_usd", "sellVolUsd", "taker_sell_vol_usd", "takerSellVolUsd", "sell"]:
-        val = target.get(key)
-        if val is not None:
-            try:
-                sell_vol = float(val)
-                break
-            except (ValueError, TypeError):
-                pass
-
-    if buy_vol is not None and sell_vol is not None:
-        total = buy_vol + sell_vol
-        if total > 0:
-            return {
-                "long_pct": round(buy_vol / total * 100, 1),
-                "short_pct": round(sell_vol / total * 100, 1),
-            }
+    if buy is not None and sell is not None:
+        try:
+            buy_f = float(buy)
+            sell_f = float(sell)
+            if buy_f > 0 or sell_f > 0:
+                return {"long_pct": round(buy_f, 1), "short_pct": round(sell_f, 1)}
+        except (ValueError, TypeError):
+            pass
 
     return {}
 
 
-async def fetch_liquidations(symbol: str) -> dict:
-    """
-    Ликвидации через coin-list (работает на Hobbyist).
-    Реальные поля из API:
-      long_liquidation_usd_4h, short_liquidation_usd_4h
-      long_liquidation_usd_24h, short_liquidation_usd_24h
-      long_liquidation_usd_12h, short_liquidation_usd_12h
-      long_liquidation_usd_1h, short_liquidation_usd_1h
-    """
-    data = await cg_get("/api/futures/liquidation/coin-list")
-    if not data:
-        return {}
-
-    # Ищем нашу монету в списке
-    target = None
-    if isinstance(data, list):
-        for item in data:
-            sym = (item.get("symbol") or item.get("coin") or "").upper()
-            if sym == symbol.upper():
-                target = item
-                break
-    elif isinstance(data, dict):
-        target = data
-
-    if not target:
-        return {}
-
-    # Берём 4h данные (или 24h как фоллбэк)
-    liq_long = target.get("long_liquidation_usd_4h")
-    liq_short = target.get("short_liquidation_usd_4h")
-
-    # Фоллбэк на 24h если 4h нет
-    if liq_long is None:
-        liq_long = target.get("long_liquidation_usd_24h")
-    if liq_short is None:
-        liq_short = target.get("short_liquidation_usd_24h")
-
-    try:
-        liq_long_f = float(liq_long) if liq_long is not None else None
-        liq_short_f = float(liq_short) if liq_short is not None else None
-    except (ValueError, TypeError):
-        return {}
-
-    return {
-        "liq_long": liq_long_f if liq_long_f and liq_long_f > 0 else None,
-        "liq_short": liq_short_f if liq_short_f and liq_short_f > 0 else None,
-    }
-
-
 async def fetch_fear_greed() -> dict:
-    """Fear & Greed Index (бесплатный, Alternative.me)."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get("https://api.alternative.me/fng/?limit=1")
@@ -418,14 +288,95 @@ async def fetch_fear_greed() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# LLM-АНАЛИЗ (Claude API)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
+    """
+    Отправляет метрики монеты в Claude API.
+    Возвращает: {llm_text, recommendation, buy_zone, sell_zone}
+    """
+    if not HAS_ANTHROPIC:
+        return {}
+
+    price = coin_data.get("price")
+    change = coin_data.get("change_24h")
+    oi = coin_data.get("oi")
+    oi_change = coin_data.get("oi_change_4h")
+    fr = coin_data.get("funding_rate")
+    long_pct = coin_data.get("long_pct")
+    short_pct = coin_data.get("short_pct")
+    liq_long = coin_data.get("liq_long")
+    liq_short = coin_data.get("liq_short")
+    fg = coin_data.get("fear_greed")
+    fg_label = coin_data.get("fear_greed_label")
+    mkt_liq_long = coin_data.get("mkt_liq_long")
+    mkt_liq_short = coin_data.get("mkt_liq_short")
+
+    prompt = f"""Ты — крипто-аналитик. Проанализируй данные {symbol} и дай краткий анализ на русском языке.
+
+ДАННЫЕ {symbol}:
+- Цена: ${price}, изменение 24ч: {change}%
+- Открытый интерес: ${oi:,.0f} ({'+' if oi_change and oi_change > 0 else ''}{oi_change}% за 4ч)
+- Funding Rate: {fr:.4f}%
+- Покупатели/Продавцы: {long_pct}% / {short_pct}%
+- Ликвидации {symbol} (4ч): лонги ${liq_long:,.0f}, шорты ${liq_short:,.0f}
+- Ликвидации РЫНОК (4ч): лонги ${mkt_liq_long:,.0f}, шорты ${mkt_liq_short:,.0f}
+- Fear & Greed: {fg} ({fg_label})
+
+ОТВЕТЬ СТРОГО В ФОРМАТЕ (3 строки, без лишнего):
+АНАЛИЗ: [2-3 предложения простым языком, без сленга, описывай что происходит на рынке]
+РЕКОМЕНДАЦИЯ: [одно слово: покупать / продавать / выжидать]
+ЗОНЫ: покупка $XXX,XXX–$XXX,XXX | продажа $XXX,XXX–$XXX,XXX"""
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-3-haiku-20240307",
+                    "max_tokens": 300,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            text = data["content"][0]["text"].strip()
+
+            # Парсим ответ
+            result = {}
+            for line in text.split("\n"):
+                line = line.strip()
+                if line.startswith("АНАЛИЗ:"):
+                    result["llm_text"] = line.replace("АНАЛИЗ:", "").strip()
+                elif line.startswith("РЕКОМЕНДАЦИЯ:"):
+                    result["recommendation"] = line.replace("РЕКОМЕНДАЦИЯ:", "").strip()
+                elif line.startswith("ЗОНЫ:"):
+                    zones = line.replace("ЗОНЫ:", "").strip()
+                    parts = zones.split("|")
+                    if len(parts) >= 2:
+                        result["buy_zone"] = parts[0].replace("покупка", "").strip()
+                        result["sell_zone"] = parts[1].replace("продажа", "").strip()
+
+            if result.get("llm_text"):
+                log.info(f"  🤖 LLM {symbol}: {result.get('recommendation', '?')}")
+            return result
+
+    except Exception as e:
+        log.warning(f"LLM error {symbol}: {e}")
+        return {}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # СИГНАЛ (расчёт силы сигнала)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def calculate_signal(coin_data: dict) -> tuple[str, str]:
-    """
-    Рассчитывает силу сигнала на основе собранных данных.
-    Возвращает: (signal_bar, signal_label)
-    """
     score = 0
     max_score = 0
 
@@ -494,27 +445,34 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
 
 async def collect_all():
     """
-    Собирает данные по всем монетам и сохраняет в Supabase.
-    Вызывается по расписанию каждые 15 минут.
-
-    Оптимизация для Hobbyist (30 req/min):
-    - 2 общих запроса (Fear&Greed + CoinGecko)
-    - 4 запроса на монету (OI, FR, Taker B/S, LIQ coin-list)
-    - = 2 + 4*5 = 22 запроса на цикл
-    - Задержка 3 сек между монетами чтобы не превысить лимит
+    Собирает данные по всем монетам + LLM-анализ, сохраняет в Supabase.
     """
     log.info("📡 Начинаем сбор данных...")
 
-    # Общие данные (1 запрос для всех монет)
+    # Общие данные
     fg_data = await fetch_fear_greed()
     prices = await fetch_prices()
 
-    # Ликвидации — 1 запрос на все монеты (coin-list возвращает весь список)
+    # Ликвидации — 1 запрос на все монеты
     liq_all = await cg_get("/api/futures/liquidation/coin-list")
     liq_by_coin = {}
+    total_liq_long_4h = 0.0
+    total_liq_short_4h = 0.0
+
     if liq_all and isinstance(liq_all, list):
         for item in liq_all:
             sym = (item.get("symbol") or "").upper()
+
+            # Суммируем общие ликвидации рынка (ВСЕ монеты)
+            try:
+                ll = float(item.get("long_liquidation_usd_4h") or 0)
+                ls = float(item.get("short_liquidation_usd_4h") or 0)
+                total_liq_long_4h += ll
+                total_liq_short_4h += ls
+            except (ValueError, TypeError):
+                pass
+
+            # Сохраняем по нашим монетам
             if sym in COINS:
                 liq_long = item.get("long_liquidation_usd_4h")
                 liq_short = item.get("short_liquidation_usd_4h")
@@ -523,30 +481,27 @@ async def collect_all():
                 if liq_short is None:
                     liq_short = item.get("short_liquidation_usd_24h")
                 try:
-                    ll = float(liq_long) if liq_long is not None else None
-                    ls = float(liq_short) if liq_short is not None else None
+                    ll_coin = float(liq_long) if liq_long is not None else None
+                    ls_coin = float(liq_short) if liq_short is not None else None
                     liq_by_coin[sym] = {
-                        "liq_long": ll if ll and ll > 0 else None,
-                        "liq_short": ls if ls and ls > 0 else None,
+                        "liq_long": ll_coin if ll_coin and ll_coin > 0 else None,
+                        "liq_short": ls_coin if ls_coin and ls_coin > 0 else None,
                     }
                 except (ValueError, TypeError):
                     pass
 
     if liq_by_coin:
-        log.info(f"  📊 Ликвидации загружены для {len(liq_by_coin)} монет")
+        log.info(f"  📊 Ликвидации: {len(liq_by_coin)} монет | Рынок 4ч: лонги {fmt_usd(total_liq_long_4h)}, шорты {fmt_usd(total_liq_short_4h)}")
 
     for i, symbol in enumerate(COINS):
         try:
             log.info(f"  ⏳ {symbol}...")
 
-            # Задержка между монетами (кроме первой) — 3 сек
+            # Задержка между монетами (кроме первой)
             if i > 0:
                 await asyncio.sleep(3)
 
-            # Цена из общего запроса CoinGecko
             price_data = prices.get(symbol, {})
-
-            # Ликвидации из общего запроса
             liq_data = liq_by_coin.get(symbol, {})
 
             # Coinglass данные — 3 запроса параллельно
@@ -564,10 +519,17 @@ async def collect_all():
                 **ls_data,
                 **liq_data,
                 **fg_data,
+                "mkt_liq_long": total_liq_long_4h,
+                "mkt_liq_short": total_liq_short_4h,
             }
 
             # Рассчитываем сигнал
             signal_bar, signal_label = calculate_signal(coin_data)
+
+            # LLM-анализ (если есть ключ и достаточно данных)
+            llm_data = {}
+            if HAS_ANTHROPIC and coin_data.get("price") and coin_data.get("oi"):
+                llm_data = await generate_llm_analysis(symbol, coin_data)
 
             # Формируем запись для Supabase
             oi_val = coin_data.get("oi")
@@ -588,6 +550,8 @@ async def collect_all():
                 "short_vol": fmt_usd(oi_val * (short_pct_val / 100)) if oi_val and short_pct_val else "—",
                 "liq_up": fmt_usd(coin_data.get("liq_short")),
                 "liq_dn": fmt_usd(coin_data.get("liq_long")),
+                "mkt_liq_long": fmt_usd(total_liq_long_4h),
+                "mkt_liq_short": fmt_usd(total_liq_short_4h),
                 "exchange_flow": "—",
                 "whale_buy1h": "—",
                 "whale_buy24h": "—",
@@ -597,12 +561,16 @@ async def collect_all():
                 "signal": signal_bar,
                 "label": signal_label,
                 "signal_label": signal_label,
+                "llm_text": llm_data.get("llm_text", ""),
+                "recommendation": llm_data.get("recommendation", ""),
+                "buy_zone": llm_data.get("buy_zone", ""),
+                "sell_zone": llm_data.get("sell_zone", ""),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            # Сохраняем в Supabase
             await db.upsert_market_data(record)
-            log.info(f"  ✅ {symbol}: {record['price']} {record['change']} | OI:{record['oi']} | FR:{record['funding_rate']} | L/S:{record['long_pct']}/{record['short_pct']} | LIQ:{record['liq_up']}/{record['liq_dn']} | {signal_bar} {signal_label}")
+            rec = llm_data.get("recommendation", "—")
+            log.info(f"  ✅ {symbol}: {record['price']} {record['change']} | OI:{record['oi']} | FR:{record['funding_rate']} | L/S:{record['long_pct']}/{record['short_pct']} | LIQ:{record['liq_up']}/{record['liq_dn']} | {signal_bar} {signal_label} | REC:{rec}")
 
         except Exception as e:
             log.error(f"  ❌ {symbol} error: {e}")
@@ -612,13 +580,8 @@ async def collect_all():
 
 
 async def collector_loop(interval_minutes: int = 15):
-    """
-    Бесконечный цикл сбора данных.
-    Запускается как фоновая задача при старте бота.
-    """
     log.info(f"🔄 Коллектор запущен. Интервал: {interval_minutes} мин")
 
-    # Первый сбор сразу при запуске
     await collect_all()
 
     while True:
