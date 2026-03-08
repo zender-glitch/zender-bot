@@ -158,11 +158,19 @@ async def fetch_open_interest(symbol: str) -> dict:
         total_oi = float(data.get("openInterest", 0) or data.get("oi", 0) or 0)
 
     # История OI для расчёта изменения за 4ч
-    history = await cg_get("/api/futures/open-interest/ohlc-history", {
+    # Coinglass v4: openInterest camelCase (не kebab!) + /history суффикс
+    history = await cg_get("/api/futures/openInterest/ohlc-history", {
         "symbol": symbol,
         "interval": "4h",
         "limit": 2,
     })
+    # Фоллбэк: агрегированная история
+    if not history:
+        history = await cg_get("/api/futures/openInterest/aggregated-ohlc-history", {
+            "symbol": symbol,
+            "interval": "4h",
+            "limit": 2,
+        })
     oi_change_4h = None
     if history and isinstance(history, list) and len(history) >= 2:
         try:
@@ -210,16 +218,17 @@ async def fetch_long_short(symbol: str) -> dict:
     Long/Short Account Ratio.
     Пробуем несколько путей т.к. API v4 может иметь разные варианты.
     """
-    # Попытка 1: accounts ratio
+    # Coinglass v4: все long-short пути требуют /history суффикс!
     paths = [
-        "/api/futures/global-long-short-account-ratio",
-        "/api/futures/long-short/exchange-list",
-        "/api/futures/top-long-short-account-ratio",
+        "/api/futures/global-long-short-account-ratio/history",
+        "/api/futures/top-long-short-account-ratio/history",
+        "/api/futures/top-long-short-position-ratio/history",
     ]
 
     for path in paths:
         data = await cg_get(path, {"symbol": symbol, "interval": "1h", "limit": 1})
         if data:
+            log.info(f"  ✅ L/S ratio {symbol}: found via {path}")
             break
     else:
         return {}
