@@ -85,22 +85,22 @@ async def fetch_price_history():
 
 
 async def fetch_oi_history():
-    """Исторический OI — из Endpoint Overview docs.coinglass.com"""
+    """Исторический OI — нужен exchange + symbol=BTCUSDT (пара!)"""
     print("📊 Загружаем OI history...")
-    # Пробуем разные комбинации параметров — может нужен exchange
+    PAIR = f"{SYMBOL}USDT"  # BTCUSDT, не BTC!
+    # Pair-based (exchange + pair)
     for params in [
-        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
-        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1, "exchange": "Binance"},
-        {"symbol": SYMBOL, "time_type": "1d", "limit": DAYS + 1},
+        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
+        {"exchange": "Binance", "symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
     ]:
         data = await cg_get("/api/futures/openInterest/ohlc-history", params)
         if data and isinstance(data, list):
             print(f"  ✅ Получено {len(data)} записей OI (params: {params})")
             return data
-    # Альтернативный — aggregated (может не требовать exchange)
+    # Aggregated (coin-level, может не требовать exchange)
     for params in [
         {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
-        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1, "exchange": "Binance"},
+        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
     ]:
         data = await cg_get("/api/futures/openInterest/ohlc-aggregated-history", params)
         if data and isinstance(data, list):
@@ -111,21 +111,21 @@ async def fetch_oi_history():
 
 
 async def fetch_fr_history():
-    """Исторический Funding Rate"""
+    """Исторический Funding Rate — нужен exchange + pair"""
     print("💰 Загружаем FR history...")
+    PAIR = f"{SYMBOL}USDT"
     for params in [
-        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
-        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1, "exchange": "Binance"},
-        {"symbol": SYMBOL, "time_type": "1d", "limit": DAYS + 1},
+        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
+        {"exchange": "Binance", "symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
     ]:
         data = await cg_get("/api/futures/fundingRate/ohlc-history", params)
         if data and isinstance(data, list):
             print(f"  ✅ Получено {len(data)} записей FR (params: {params})")
             return data
-    # OI-weighted
+    # OI-weighted (aggregated, может принять просто symbol)
     for params in [
         {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
-        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1, "exchange": "Binance"},
+        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
     ]:
         data = await cg_get("/api/futures/fundingRate/oi-weight-ohlc-history", params)
         if data and isinstance(data, list):
@@ -136,10 +136,11 @@ async def fetch_fr_history():
 
 
 async def fetch_liquidation_history():
-    """Исторические ликвидации — требует exchange_list параметр!"""
+    """Исторические ликвидации — aggregated нужен exchange_list, pair нужен exchange"""
     print("💥 Загружаем ликвидации history...")
-    # aggregated-history: ошибка говорила "Required String parameter 'exchange_list'"
-    for exchange_list in ["Binance", "Binance,OKX,Bybit", "All"]:
+    PAIR = f"{SYMBOL}USDT"
+    # Aggregated (coin-level) — требует exchange_list
+    for exchange_list in ["Binance", "Binance,OKX,Bybit"]:
         data = await cg_get("/api/futures/liquidation/aggregated-history", {
             "symbol": SYMBOL,
             "interval": "1d",
@@ -149,60 +150,51 @@ async def fetch_liquidation_history():
         if data and isinstance(data, list):
             print(f"  ✅ Получено {len(data)} записей ликвидаций (exchange_list={exchange_list})")
             return data
-    # Pair liquidation history: requires 'exchange' param
-    for exchange in ["Binance", "OKX", "Bybit"]:
-        data = await cg_get("/api/futures/liquidation/history", {
-            "symbol": SYMBOL,
-            "interval": "1d",
-            "limit": DAYS + 1,
-            "exchange": exchange,
-        })
-        if data and isinstance(data, list):
-            print(f"  ✅ Получено {len(data)} записей ликвидаций history (exchange={exchange})")
-            return data
+    # Pair-level — требует exchange + pair
+    data = await cg_get("/api/futures/liquidation/history", {
+        "exchange": "Binance",
+        "symbol": PAIR,
+        "interval": "1d",
+        "limit": DAYS + 1,
+    })
+    if data and isinstance(data, list):
+        print(f"  ✅ Получено {len(data)} записей ликвидаций pair")
+        return data
     print("  ⚠️ Liquidation history недоступен")
     return []
 
 
 async def fetch_ls_history():
-    """Исторический Long/Short ratio — KEBAB-CASE из Endpoint Overview!"""
+    """Исторический Long/Short ratio — kebab-case + exchange + pair"""
     print("📐 Загружаем L/S history...")
-    # global L/S — kebab-case (НЕ camelCase!)
-    data = await cg_get("/api/futures/global-long-short-account-ratio/history", {
-        "symbol": SYMBOL,
-        "interval": "1d",
-        "limit": DAYS + 1,
-    })
-    if data and isinstance(data, list):
-        print(f"  ✅ Получено {len(data)} записей L/S (global)")
-        return data
-    # top trader L/S — kebab-case
-    data = await cg_get("/api/futures/top-long-short-account-ratio/history", {
-        "symbol": SYMBOL,
-        "interval": "1d",
-        "limit": DAYS + 1,
-    })
-    if data and isinstance(data, list):
-        print(f"  ✅ Получено {len(data)} записей L/S (top account)")
-        return data
-    # aggregated taker buy/sell — kebab-case, совсем другой путь!
-    data = await cg_get("/api/futures/aggregated-taker-buy-sell-volume/history", {
-        "symbol": SYMBOL,
-        "interval": "1d",
-        "limit": DAYS + 1,
-    })
-    if data and isinstance(data, list):
-        print(f"  ✅ Получено {len(data)} записей taker B/S aggregated")
-        return data
-    # pair taker history
-    data = await cg_get("/api/futures/taker-buy-sell-volume/history", {
-        "symbol": SYMBOL,
-        "interval": "1d",
-        "limit": DAYS + 1,
-    })
-    if data and isinstance(data, list):
-        print(f"  ✅ Получено {len(data)} записей taker B/S pair")
-        return data
+    PAIR = f"{SYMBOL}USDT"
+    # global L/S — пробуем с exchange и парой
+    for params in [
+        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
+        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
+    ]:
+        data = await cg_get("/api/futures/global-long-short-account-ratio/history", params)
+        if data and isinstance(data, list):
+            print(f"  ✅ Получено {len(data)} записей L/S global (params: {params})")
+            return data
+    # top trader L/S
+    for params in [
+        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
+        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
+    ]:
+        data = await cg_get("/api/futures/top-long-short-account-ratio/history", params)
+        if data and isinstance(data, list):
+            print(f"  ✅ Получено {len(data)} записей L/S top (params: {params})")
+            return data
+    # aggregated taker buy/sell
+    for params in [
+        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
+        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
+    ]:
+        data = await cg_get("/api/futures/aggregated-taker-buy-sell-volume/history", params)
+        if data and isinstance(data, list):
+            print(f"  ✅ Получено {len(data)} записей taker B/S (params: {params})")
+            return data
     print("  ⚠️ L/S history недоступен")
     return []
 
