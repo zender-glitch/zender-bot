@@ -88,18 +88,22 @@ def fmt_price(value):
 # API ЗАПРОСЫ
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def cg_get(path: str, params: dict = None) -> dict | None:
-    """GET запрос к Coinglass API v4"""
+async def cg_get(path: str, params: dict = None) -> dict | list | None:
+    """GET запрос к Coinglass API v4. Возвращает data из ответа."""
     url = f"{CG_BASE}{path}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(url, headers=CG_HEADERS, params=params or {})
             resp.raise_for_status()
-            data = resp.json()
-            if data.get("success") is False:
-                log.warning(f"CG API error {path}: {data.get('msg', 'unknown')}")
+            body = resp.json()
+            if body.get("success") is False:
+                log.warning(f"CG API error {path}: {body.get('msg', 'unknown')}")
                 return None
-            return data.get("data")
+            result = body.get("data")
+            # DEBUG: логируем если data пустая но запрос успешный
+            if result is None or result == [] or result == {}:
+                log.warning(f"CG API empty data {path}: keys={list(body.keys())}, code={body.get('code')}")
+            return result
     except httpx.HTTPStatusError as e:
         log.error(f"CG HTTP error {path}: {e.response.status_code}")
         return None
@@ -223,7 +227,8 @@ async def fetch_funding_rate(symbol: str) -> dict:
         return {}
 
     avg_rate = sum(rates) / len(rates)
-    return {"funding_rate": avg_rate}
+    # API отдаёт в десятичной форме (-0.002744 = -0.27%), умножаем на 100
+    return {"funding_rate": avg_rate * 100}
 
 
 async def fetch_long_short(symbol: str) -> dict:
@@ -239,7 +244,8 @@ async def fetch_long_short(symbol: str) -> dict:
 
     for path in paths:
         data = await cg_get(path, {"symbol": symbol, "interval": "1h", "limit": 1})
-        if data:
+        # data is not None — даже пустой список/словарь означает что эндпоинт ответил
+        if data is not None and data != [] and data != {}:
             break
     else:
         return {}
@@ -247,9 +253,10 @@ async def fetch_long_short(symbol: str) -> dict:
     try:
         if isinstance(data, list) and len(data) > 0:
             item = data[-1]
-        elif isinstance(data, dict):
+        elif isinstance(data, dict) and len(data) > 0:
             item = data
         else:
+            log.warning(f"  L/S {symbol}: data is empty: {data}")
             return {}
 
         # DEBUG: логируем поля для отладки
@@ -304,15 +311,16 @@ async def fetch_liquidations(symbol: str) -> dict:
         "interval": "4h",
         "limit": 1,
     })
-    if not data:
+    if data is None:
         return {}
 
     try:
         if isinstance(data, list) and len(data) > 0:
             item = data[-1]
-        elif isinstance(data, dict):
+        elif isinstance(data, dict) and len(data) > 0:
             item = data
         else:
+            log.warning(f"  LIQ {symbol}: data is empty: {data}")
             return {}
 
         # DEBUG: логируем поля для отладки
