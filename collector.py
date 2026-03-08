@@ -151,6 +151,14 @@ async def fetch_open_interest(symbol: str) -> dict:
     if not data:
         return {}
 
+    # DEBUG: показать структуру ответа для BTC
+    if symbol == "BTC":
+        if isinstance(data, list) and len(data) > 0:
+            log.info(f"  🔍 DEBUG OI keys: {list(data[0].keys())}")
+            log.info(f"  🔍 DEBUG OI first: {data[0]}")
+        elif isinstance(data, dict):
+            log.info(f"  🔍 DEBUG OI dict keys: {list(data.keys())}")
+
     total_oi = 0
     if isinstance(data, list):
         for item in data:
@@ -189,6 +197,14 @@ async def fetch_funding_rate(symbol: str) -> dict:
     data = await cg_get("/api/futures/funding-rate/exchange-list", {"symbol": symbol})
     if not data:
         return {}
+
+    # DEBUG: показать структуру ответа для BTC
+    if symbol == "BTC":
+        if isinstance(data, list) and len(data) > 0:
+            log.info(f"  🔍 DEBUG FR keys: {list(data[0].keys())}")
+            log.info(f"  🔍 DEBUG FR first: {data[0]}")
+        elif isinstance(data, dict):
+            log.info(f"  🔍 DEBUG FR dict keys: {list(data.keys())}")
 
     rates = []
     items = data if isinstance(data, list) else [data]
@@ -234,6 +250,11 @@ async def fetch_long_short(symbol: str) -> dict:
             item = data
         else:
             return {}
+
+        # DEBUG: показать структуру ответа для BTC
+        if symbol == "BTC":
+            log.info(f"  🔍 DEBUG L/S keys: {list(item.keys())}")
+            log.info(f"  🔍 DEBUG L/S item: {item}")
 
         # Пробуем разные имена полей
         long_ratio = float(
@@ -285,6 +306,11 @@ async def fetch_liquidations(symbol: str) -> dict:
             item = data
         else:
             return {}
+
+        # DEBUG: показать структуру ответа для BTC
+        if symbol == "BTC":
+            log.info(f"  🔍 DEBUG LIQ keys: {list(item.keys())}")
+            log.info(f"  🔍 DEBUG LIQ item: {item}")
 
         liq_long = float(
             item.get("longLiquidationUsd", 0) or item.get("buyVolUsd", 0) or
