@@ -159,9 +159,7 @@ def text_summary(user_coins: list[str], data: dict) -> str:
         lines.append(f"<code>{coin:<5} {str(price):>10}  {arrow} {change:<9} {signal} {label}</code>")
 
     lines.append("")
-    lines.append("<code>──────────────────────────────────</code>")
     lines.append("⚡ <b>Zender Commander Terminal</b>")
-    lines.append("t.me/ZenderCommander_bot")
     return "\n".join(lines)
 
 
@@ -280,9 +278,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
 
     # ── СИГНАЛ ──
     lines.append("")
-    lines.append("<code>──────────────────────────────────</code>")
-    lines.append(f"<code>СИГНАЛ   {signal}   {sig_lbl}</code>")
-    lines.append("<code>──────────────────────────────────</code>")
+    lines.append(f"⚡ <code>СИГНАЛ   {signal}   {sig_lbl}</code>")
 
     # ── LLM-АНАЛИЗ ──
     if llm_text:
@@ -310,7 +306,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             lines.append(f"🔻 <code>Зона продажи:  {sell_zone}</code>")
 
     lines.append("")
-    lines.append("⚡ <b>Zender Commander Terminal</b> · t.me/ZenderCommander_bot")
+    lines.append("⚡ <b>Zender Commander Terminal</b>")
 
     return "\n".join(lines)
 
@@ -460,7 +456,7 @@ async def cb_plan(call: CallbackQuery):
     }
     plan_key  = call.data
     plan_name, plan_price = plan_map.get(plan_key, ("?", "?"))
-    # TODO: здесь будет редирект на Stripe
+    # TODO: здесь будет Telegram Payments
     await call.answer(
         f"💳 Оплата {plan_name} {plan_price} — скоро будет доступно!",
         show_alert=True
