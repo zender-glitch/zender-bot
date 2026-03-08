@@ -2,6 +2,9 @@
 ZENDER COMMANDER TERMINAL — Data Collector
 Этап 2: сбор данных из Coinglass API v4 + Fear & Greed Index
 Запускается по расписанию, кладёт данные в Supabase.
+
+ПЛАН: Hobbyist (80+ endpoints). L/S ratio и Liquidation history
+      недоступны — пробуем альтернативы (coin-list, taker buy/sell).
 """
 
 import asyncio
@@ -68,6 +71,18 @@ def fmt_pct(value):
         return "—"
 
 
+def fmt_fr(value):
+    """Форматирование funding rate с 4 знаками: +0.0045%"""
+    if value is None:
+        return "—"
+    try:
+        v = float(value)
+        sign = "+" if v > 0 else ""
+        return f"{sign}{v:.4f}%"
+    except (ValueError, TypeError):
+        return "—"
+
+
 def fmt_price(value):
     """Форматирование цены: $83,420"""
     if value is None:
@@ -96,14 +111,24 @@ async def cg_get(path: str, params: dict = None) -> dict | list | None:
             resp = await client.get(url, headers=CG_HEADERS, params=params or {})
             resp.raise_for_status()
             body = resp.json()
+
+            # Проверяем код ответа в теле JSON (API возвращает HTTP 200 даже при ошибках)
+            body_code = body.get("code")
+            if body_code is not None and str(body_code) != "0":
+                msg = body.get("msg", "unknown")
+                if str(body_code) == "403":
+                    log.warning(f"CG API 403 (план не включает) {path}: {msg}")
+                elif str(body_code) == "400":
+                    log.warning(f"CG API 400 (неверные параметры) {path}: {msg}")
+                else:
+                    log.warning(f"CG API code={body_code} {path}: {msg}")
+                return None
+
             if body.get("success") is False:
                 log.warning(f"CG API error {path}: {body.get('msg', 'unknown')}")
                 return None
-            result = body.get("data")
-            # DEBUG: логируем если data пустая но запрос успешный
-            if result is None or result == [] or result == {}:
-                log.warning(f"CG API empty data {path}: keys={list(body.keys())}, code={body.get('code')}")
-            return result
+
+            return body.get("data")
     except httpx.HTTPStatusError as e:
         log.error(f"CG HTTP error {path}: {e.response.status_code}")
         return None
@@ -233,119 +258,258 @@ async def fetch_funding_rate(symbol: str) -> dict:
 
 async def fetch_long_short(symbol: str) -> dict:
     """
-    Long/Short Account Ratio.
-    Coinglass v4: пути требуют /history суффикс.
+    Long/Short данные.
+    Hobbyist план НЕ включает /history эндпоинты (code=403).
+    Пробуем альтернативы:
+      1. taker-buy-sell-volume/exchange-list — соотношение покупок/продаж (Hobbyist)
+      2. global-long-short-account-ratio/chart — может быть на Hobbyist
+      3. Стандартные /history эндпоинты (для Startup+)
     """
+    # Вариант 1: Taker Buy/Sell Volume (часто доступен на Hobbyist)
+    data = await cg_get("/api/futures/taker-buy-sell-volume/exchange-list", {"symbol": symbol})
+    if data is not None:
+        # Ищем агрегат по всем биржам
+        target = None
+        if isinstance(data, list):
+            for item in data:
+                if item.get("exchange") == "All":
+                    target = item
+                    break
+            if not target and len(data) > 0:
+                target = data[0]
+        elif isinstance(data, dict):
+            target = data
+
+        if target:
+            buy = target.get("buy_ratio") or target.get("buyRatio") or target.get("buy_vol_rate")
+            sell = target.get("sell_ratio") or target.get("sellRatio") or target.get("sell_vol_rate")
+
+            if buy is not None and sell is not None:
+                try:
+                    buy_f = float(buy)
+                    sell_f = float(sell)
+                    if buy_f > 0 or sell_f > 0:
+                        # Нормализуем в проценты
+                        if buy_f <= 1 and sell_f <= 1:
+                            return {
+                                "long_pct": round(buy_f * 100, 1),
+                                "short_pct": round(sell_f * 100, 1),
+                            }
+                        else:
+                            return {
+                                "long_pct": round(buy_f, 1),
+                                "short_pct": round(sell_f, 1),
+                            }
+                except (ValueError, TypeError):
+                    pass
+
+            # Может быть в другом формате: volumes
+            buy_vol = target.get("buy_vol_usd") or target.get("buyVolUsd")
+            sell_vol = target.get("sell_vol_usd") or target.get("sellVolUsd")
+            if buy_vol is not None and sell_vol is not None:
+                try:
+                    bv = float(buy_vol)
+                    sv = float(sell_vol)
+                    total = bv + sv
+                    if total > 0:
+                        return {
+                            "long_pct": round(bv / total * 100, 1),
+                            "short_pct": round(sv / total * 100, 1),
+                        }
+                except (ValueError, TypeError):
+                    pass
+
+            # DEBUG: логируем поля чтобы понять структуру
+            if symbol == "BTC":
+                log.info(f"  TAKER B/S keys: {list(target.keys())}")
+                sample = {k: target[k] for k in list(target.keys())[:10]}
+                log.info(f"  TAKER B/S sample: {sample}")
+
+    # Вариант 2: Стандартные L/S эндпоинты (Startup+)
     paths = [
         "/api/futures/global-long-short-account-ratio/history",
         "/api/futures/top-long-short-account-ratio/history",
         "/api/futures/top-long-short-position-ratio/history",
     ]
-
     for path in paths:
         data = await cg_get(path, {"symbol": symbol, "interval": "1h", "limit": 1})
-        # data is not None — даже пустой список/словарь означает что эндпоинт ответил
         if data is not None and data != [] and data != {}:
-            break
-    else:
-        return {}
+            try:
+                if isinstance(data, list) and len(data) > 0:
+                    item = data[-1]
+                elif isinstance(data, dict) and len(data) > 0:
+                    item = data
+                else:
+                    continue
 
-    try:
-        if isinstance(data, list) and len(data) > 0:
-            item = data[-1]
-        elif isinstance(data, dict) and len(data) > 0:
-            item = data
-        else:
-            log.warning(f"  L/S {symbol}: data is empty: {data}")
-            return {}
+                long_ratio = float(
+                    item.get("long_rate", 0) or item.get("longRate", 0) or
+                    item.get("long_account", 0) or item.get("longAccount", 0) or
+                    item.get("long_ratio", 0) or item.get("longRatio", 0) or 0
+                )
+                short_ratio = float(
+                    item.get("short_rate", 0) or item.get("shortRate", 0) or
+                    item.get("short_account", 0) or item.get("shortAccount", 0) or
+                    item.get("short_ratio", 0) or item.get("shortRatio", 0) or 0
+                )
 
-        # DEBUG: логируем поля для отладки
-        if symbol == "BTC":
-            log.info(f"  🔍 DEBUG L/S keys: {list(item.keys())}")
-            log.info(f"  🔍 DEBUG L/S item: {item}")
+                if long_ratio == 0 and short_ratio == 0:
+                    continue
 
-        # Пробуем разные имена полей (snake_case и camelCase)
-        long_ratio = float(
-            item.get("long_rate", 0) or item.get("longRate", 0) or
-            item.get("long_account", 0) or item.get("longAccount", 0) or
-            item.get("long_ratio", 0) or item.get("longRatio", 0) or
-            item.get("buy_ratio", 0) or item.get("buyRatio", 0) or 0
-        )
-        short_ratio = float(
-            item.get("short_rate", 0) or item.get("shortRate", 0) or
-            item.get("short_account", 0) or item.get("shortAccount", 0) or
-            item.get("short_ratio", 0) or item.get("shortRatio", 0) or
-            item.get("sell_ratio", 0) or item.get("sellRatio", 0) or 0
-        )
+                if long_ratio <= 1 and short_ratio <= 1:
+                    long_pct = long_ratio * 100
+                    short_pct = short_ratio * 100
+                elif long_ratio < 10 and short_ratio < 10:
+                    total = long_ratio + short_ratio
+                    long_pct = (long_ratio / total) * 100
+                    short_pct = (short_ratio / total) * 100
+                else:
+                    long_pct = long_ratio
+                    short_pct = short_ratio
 
-        if long_ratio == 0 and short_ratio == 0:
-            return {}
+                return {
+                    "long_pct": round(long_pct, 1),
+                    "short_pct": round(short_pct, 1),
+                }
+            except (ValueError, TypeError):
+                continue
 
-        # Нормализуем в проценты
-        if long_ratio > 0 and long_ratio <= 1 and short_ratio > 0 and short_ratio <= 1:
-            # Значения 0-1 → конвертируем в %
-            long_pct = long_ratio * 100
-            short_pct = short_ratio * 100
-        elif long_ratio > 0 and long_ratio < 10 and short_ratio > 0 and short_ratio < 10:
-            total = long_ratio + short_ratio
-            long_pct = (long_ratio / total) * 100
-            short_pct = (short_ratio / total) * 100
-        else:
-            long_pct = long_ratio
-            short_pct = short_ratio
-
-        return {
-            "long_pct": round(long_pct, 1),
-            "short_pct": round(short_pct, 1),
-        }
-    except (ValueError, TypeError):
-        return {}
+    return {}
 
 
 async def fetch_liquidations(symbol: str) -> dict:
     """
-    Ликвидации за последние 4 часа.
+    Ликвидации.
+    Hobbyist план НЕ включает /history (code=400/403).
+    Пробуем альтернативы:
+      1. /api/futures/liquidation/coin-list — текущие ликвидации по монете
+      2. /api/futures/liquidation/exchange-list — по биржам
+      3. /api/futures/liquidation/history — стандартный (Startup+)
     """
-    data = await cg_get("/api/futures/liquidation/history", {
-        "symbol": symbol,
-        "interval": "4h",
-        "limit": 1,
-    })
-    if data is None:
-        return {}
+    # Вариант 1: coin-list (может быть на Hobbyist)
+    data = await cg_get("/api/futures/liquidation/coin-list", {"symbol": symbol})
+    if data is not None:
+        target = None
+        if isinstance(data, list):
+            for item in data:
+                sym = item.get("symbol") or item.get("coin")
+                if sym and sym.upper() == symbol.upper():
+                    target = item
+                    break
+            if not target and len(data) > 0:
+                target = data[0]
+        elif isinstance(data, dict):
+            target = data
 
-    try:
+        if target:
+            # DEBUG: логируем поля для BTC
+            if symbol == "BTC":
+                log.info(f"  LIQ coin-list keys: {list(target.keys())}")
+                sample = {k: target[k] for k in list(target.keys())[:10]}
+                log.info(f"  LIQ coin-list sample: {sample}")
+
+            # Пробуем разные имена полей
+            liq_long = None
+            liq_short = None
+
+            for key in ["long_liquidation_usd", "longLiquidationUsd", "long_vol_usd",
+                        "longVolUsd", "buy_vol_usd", "buyVolUsd",
+                        "total_long_liquidation_usd", "long_usd",
+                        "h4_long_liquidation_usd", "h4LongLiquidationUsd",
+                        "h24_long_liquidation_usd", "h24LongLiquidationUsd"]:
+                val = target.get(key)
+                if val is not None:
+                    try:
+                        liq_long = float(val)
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            for key in ["short_liquidation_usd", "shortLiquidationUsd", "short_vol_usd",
+                        "shortVolUsd", "sell_vol_usd", "sellVolUsd",
+                        "total_short_liquidation_usd", "short_usd",
+                        "h4_short_liquidation_usd", "h4ShortLiquidationUsd",
+                        "h24_short_liquidation_usd", "h24ShortLiquidationUsd"]:
+                val = target.get(key)
+                if val is not None:
+                    try:
+                        liq_short = float(val)
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            if liq_long is not None or liq_short is not None:
+                return {
+                    "liq_long": liq_long if liq_long and liq_long > 0 else None,
+                    "liq_short": liq_short if liq_short and liq_short > 0 else None,
+                }
+
+    # Вариант 2: exchange-list
+    data = await cg_get("/api/futures/liquidation/exchange-list", {"symbol": symbol})
+    if data is not None:
         if isinstance(data, list) and len(data) > 0:
-            item = data[-1]
-        elif isinstance(data, dict) and len(data) > 0:
-            item = data
-        else:
-            log.warning(f"  LIQ {symbol}: data is empty: {data}")
-            return {}
+            total_long = 0
+            total_short = 0
+            for item in data:
+                for key in ["long_liquidation_usd", "longLiquidationUsd", "long_vol_usd"]:
+                    val = item.get(key)
+                    if val is not None:
+                        try:
+                            total_long += float(val)
+                        except (ValueError, TypeError):
+                            pass
+                        break
+                for key in ["short_liquidation_usd", "shortLiquidationUsd", "short_vol_usd"]:
+                    val = item.get(key)
+                    if val is not None:
+                        try:
+                            total_short += float(val)
+                        except (ValueError, TypeError):
+                            pass
+                        break
 
-        # DEBUG: логируем поля для отладки
-        if symbol == "BTC":
-            log.info(f"  🔍 DEBUG LIQ keys: {list(item.keys())}")
-            log.info(f"  🔍 DEBUG LIQ item: {item}")
+            if total_long > 0 or total_short > 0:
+                return {
+                    "liq_long": total_long if total_long > 0 else None,
+                    "liq_short": total_short if total_short > 0 else None,
+                }
 
-        # Пробуем snake_case и camelCase
-        liq_long = float(
-            item.get("long_liquidation_usd", 0) or item.get("longLiquidationUsd", 0) or
-            item.get("buy_vol_usd", 0) or item.get("buyVolUsd", 0) or
-            item.get("long_vol_usd", 0) or item.get("longVolUsd", 0) or 0
-        )
-        liq_short = float(
-            item.get("short_liquidation_usd", 0) or item.get("shortLiquidationUsd", 0) or
-            item.get("sell_vol_usd", 0) or item.get("sellVolUsd", 0) or
-            item.get("short_vol_usd", 0) or item.get("shortVolUsd", 0) or 0
-        )
+            # DEBUG
+            if symbol == "BTC" and len(data) > 0:
+                log.info(f"  LIQ exchange-list keys: {list(data[0].keys())}")
+                sample = {k: data[0][k] for k in list(data[0].keys())[:10]}
+                log.info(f"  LIQ exchange-list sample: {sample}")
 
-        return {
-            "liq_long": liq_long if liq_long > 0 else None,
-            "liq_short": liq_short if liq_short > 0 else None,
-        }
-    except (ValueError, TypeError):
-        return {}
+    # Вариант 3: history (Startup+)
+    data = await cg_get("/api/futures/liquidation/history", {
+        "symbol": symbol, "interval": "4h", "limit": 1,
+    })
+    if data is not None:
+        try:
+            if isinstance(data, list) and len(data) > 0:
+                item = data[-1]
+            elif isinstance(data, dict) and len(data) > 0:
+                item = data
+            else:
+                return {}
+
+            liq_long = float(
+                item.get("long_liquidation_usd", 0) or item.get("longLiquidationUsd", 0) or
+                item.get("long_vol_usd", 0) or item.get("longVolUsd", 0) or 0
+            )
+            liq_short = float(
+                item.get("short_liquidation_usd", 0) or item.get("shortLiquidationUsd", 0) or
+                item.get("short_vol_usd", 0) or item.get("shortVolUsd", 0) or 0
+            )
+
+            return {
+                "liq_long": liq_long if liq_long > 0 else None,
+                "liq_short": liq_short if liq_short > 0 else None,
+            }
+        except (ValueError, TypeError):
+            pass
+
+    return {}
 
 
 async def fetch_fear_greed() -> dict:
@@ -499,7 +663,7 @@ async def collect_all():
                 "oi": fmt_usd(oi_val),
                 "oi_raw": oi_val,
                 "oi_change": fmt_pct(coin_data.get("oi_change_4h")),
-                "funding_rate": fmt_pct(coin_data.get("funding_rate")),
+                "funding_rate": fmt_fr(coin_data.get("funding_rate")),
                 "long_pct": f"{long_pct_val}%" if long_pct_val is not None else "—",
                 "short_pct": f"{short_pct_val}%" if short_pct_val is not None else "—",
                 "long_vol": fmt_usd(oi_val * (long_pct_val / 100)) if oi_val and long_pct_val else "—",
@@ -520,7 +684,7 @@ async def collect_all():
 
             # Сохраняем в Supabase
             await db.upsert_market_data(record)
-            log.info(f"  ✅ {symbol}: {record['price']} {record['change']} | OI:{record['oi']} | FR:{record['funding_rate']} | L/S:{record['long_pct']}/{record['short_pct']} | {signal_bar} {signal_label}")
+            log.info(f"  ✅ {symbol}: {record['price']} {record['change']} | OI:{record['oi']} | FR:{record['funding_rate']} | L/S:{record['long_pct']}/{record['short_pct']} | LIQ:{record['liq_up']}/{record['liq_dn']} | {signal_bar} {signal_label}")
 
         except Exception as e:
             log.error(f"  ❌ {symbol} error: {e}")
