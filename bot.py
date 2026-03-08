@@ -336,8 +336,8 @@ async def cmd_start(message: Message):
 async def cmd_summary(message: Message):
     """Сводка по монетам"""
     user_id = message.from_user.id
-    user = await db.get_user(user_id)
-    coins = user.get("coins", COINS) if user else COINS
+    # Тестовый режим: все монеты всем. После Telegram Payments — ограничить по тарифу.
+    coins = COINS
     data  = await db.get_market_data(coins)
     await message.answer(
         text_summary(coins, data),
@@ -388,8 +388,8 @@ async def cmd_status(message: Message):
 @dp.callback_query(F.data == "summary")
 async def cb_summary(call: CallbackQuery):
     user_id = call.from_user.id
-    user    = await db.get_user(user_id)
-    coins   = user.get("coins", COINS) if user else COINS
+    # Тестовый режим: все монеты всем
+    coins   = COINS
     data    = await db.get_market_data(coins)
     await call.message.edit_text(
         text_summary(coins, data),
