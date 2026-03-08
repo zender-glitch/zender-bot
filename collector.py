@@ -388,11 +388,9 @@ async def fetch_onchain_data(symbol: str) -> dict:
     result = {}
 
     try:
-        active_data, tx_data, sopr_data, exch_data = await asyncio.gather(
+        active_data, tx_data = await asyncio.gather(
             blockchain_chart_get("n-unique-addresses"),
             blockchain_chart_get("n-transactions"),
-            bgeometrics_get("sopr"),
-            bgeometrics_get("balance_exchanges"),
             return_exceptions=True,
         )
     except Exception as e:
@@ -404,10 +402,6 @@ async def fetch_onchain_data(symbol: str) -> dict:
         active_data = None
     if isinstance(tx_data, Exception):
         tx_data = None
-    if isinstance(sopr_data, Exception):
-        sopr_data = None
-    if isinstance(exch_data, Exception):
-        exch_data = None
 
     val, change = parse_chart_values(active_data)
     if val:
@@ -419,15 +413,10 @@ async def fetch_onchain_data(symbol: str) -> dict:
     if val:
         result["tx_count"] = int(val)
 
-    val, _ = parse_chart_values(sopr_data)
-    if val:
-        result["sopr"] = round(val, 4)
-
-    val, change = parse_chart_values(exch_data)
-    if val:
-        result["exchange_balance"] = val
-        if change is not None:
-            result["exchange_balance_change"] = change
+    # TODO: BGeometrics SOPR + Exchange Balance — URL-ы возвращают 404
+    # Нужно найти правильные эндпоинты. Пока отключено.
+    # sopr_data = await bgeometrics_get("sopr")
+    # exch_data = await bgeometrics_get("balance_exchanges")
 
     if result:
         log.info(f"  🔗 On-chain BTC: {list(result.keys())}")
