@@ -230,7 +230,9 @@ async def fetch_long_short(symbol: str) -> dict:
         "range": "1h",
     })
     if data is None:
+        log.warning(f"  L/S {symbol}: data is None")
         return {}
+    log.info(f"  L/S {symbol} type={type(data).__name__}, len={len(data) if isinstance(data, list) else 'n/a'}, sample={str(data)[:300]}")
 
     target = None
     if isinstance(data, list):
