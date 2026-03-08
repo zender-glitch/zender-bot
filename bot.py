@@ -5,6 +5,7 @@ ZENDER COMMANDER TERMINAL — Telegram Bot
 
 import asyncio
 import logging
+import html as html_lib
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, CallbackQuery,
@@ -311,7 +312,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     if llm_text:
         lines.append("")
         lines.append(f"🤖 <b>AI-АНАЛИЗ</b>")
-        lines.append(f"{llm_text}")
+        lines.append(html_lib.escape(llm_text))
 
     # ── РЕКОМЕНДАЦИЯ + ЗОНЫ ──
     if recommendation:
@@ -323,14 +324,14 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         else:
             rec_icon = "🟡"
         lines.append("")
-        lines.append(f"{rec_icon} <b>РЕКОМЕНДАЦИЯ:</b> {recommendation}")
+        lines.append(f"{rec_icon} <b>РЕКОМЕНДАЦИЯ:</b> {html_lib.escape(recommendation)}")
 
     if buy_zone or sell_zone:
         lines.append("")
         if buy_zone:
-            lines.append(f"🔺 <code>Зона покупки:  {buy_zone}</code>")
+            lines.append(f"🔺 <code>Зона покупки:  {html_lib.escape(buy_zone)}</code>")
         if sell_zone:
-            lines.append(f"🔻 <code>Зона продажи:  {sell_zone}</code>")
+            lines.append(f"🔻 <code>Зона продажи:  {html_lib.escape(sell_zone)}</code>")
 
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
