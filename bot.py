@@ -253,6 +253,35 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             lines.append(f"<code>  ↑ шорты   {mkt_liq_short}</code>")
             lines.append(f"<code>  ↓ лонги   {mkt_liq_long}</code>")
 
+    # ── ON-CHAIN (Glassnode) ──
+    active_addr = d.get("active_addresses", "—")
+    active_addr_chg = d.get("active_addresses_change", "—")
+    exchange_bal = d.get("exchange_balance", "—")
+    exchange_bal_chg = d.get("exchange_balance_change", "—")
+    sopr_val = d.get("sopr", "—")
+    new_addr = d.get("new_addresses", "—")
+
+    has_onchain = _has(active_addr) or _has(exchange_bal) or _has(sopr_val)
+    if has_onchain:
+        lines.append("")
+        lines.append("<b>ON-CHAIN (Glassnode)</b>")
+        if _has(active_addr):
+            addr_arrow = _arrow(active_addr_chg)
+            lines.append(f"<code>  👥 адреса    {active_addr} {addr_arrow} {active_addr_chg}</code>")
+        if _has(exchange_bal):
+            bal_arrow = _arrow(exchange_bal_chg)
+            # Инвертируем стрелку — падение баланса на биржах = бычий сигнал
+            lines.append(f"<code>  🏦 биржи     {exchange_bal} {bal_arrow} {exchange_bal_chg}</code>")
+        if _has(sopr_val):
+            try:
+                sv = float(sopr_val)
+                sopr_hint = "прибыль" if sv > 1 else "убыток" if sv < 1 else "безубыток"
+            except (ValueError, TypeError):
+                sopr_hint = ""
+            lines.append(f"<code>  📊 SOPR      {sopr_val} — {sopr_hint}</code>")
+        if _has(new_addr):
+            lines.append(f"<code>  🆕 новые     {new_addr}</code>")
+
     # ── НАСТРОЕНИЕ ──
     if _has(fg):
         lines.append("")

@@ -22,6 +22,14 @@ except (ImportError, AttributeError):
     ANTHROPIC_KEY = None
     HAS_ANTHROPIC = False
 
+# Glassnode API (on-chain данные)
+try:
+    from config import GLASSNODE_API_KEY
+    HAS_GLASSNODE = bool(GLASSNODE_API_KEY)
+except (ImportError, AttributeError):
+    GLASSNODE_API_KEY = None
+    HAS_GLASSNODE = False
+
 from database import db
 
 log = logging.getLogger(__name__)
@@ -287,6 +295,137 @@ async def fetch_fear_greed() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# GLASSNODE ON-CHAIN DATA
+# ══════════════════════════════════════════════════════════════════════════════
+
+GN_BASE = "https://api.glassnode.com/v1/metrics"
+
+# Маппинг наших символов → Glassnode asset codes
+GLASSNODE_ASSETS = {
+    "BTC": "BTC",
+    "ETH": "ETH",
+    # SOL, BNB, AVAX — ограниченная поддержка on-chain, пробуем
+    "SOL": "SOL",
+    "BNB": "BNB",
+    "AVAX": None,  # не поддерживается
+}
+
+
+async def gn_get(path: str, asset: str) -> dict | list | None:
+    """Запрос к Glassnode API. Возвращает data или None."""
+    if not HAS_GLASSNODE:
+        return None
+    url = f"{GN_BASE}{path}"
+    params = {"a": asset, "api_key": GLASSNODE_API_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 401:
+                log.warning(f"GN 401 (bad API key) {path}")
+                return None
+            if resp.status_code == 403:
+                log.warning(f"GN 403 (tier limit) {path} for {asset}")
+                return None
+            if resp.status_code == 429:
+                log.warning(f"GN 429 (rate limit) {path}")
+                return None
+            if resp.status_code != 200:
+                log.warning(f"GN {resp.status_code} {path}")
+                return None
+            data = resp.json()
+            return data
+    except Exception as e:
+        log.error(f"GN request {path}: {e}")
+        return None
+
+
+async def fetch_glassnode_data(symbol: str) -> dict:
+    """
+    Получает on-chain метрики из Glassnode для монеты.
+    Бесплатный tier: daily resolution, Tier 1 метрики.
+    Возвращает dict с on-chain данными.
+    """
+    asset = GLASSNODE_ASSETS.get(symbol)
+    if not asset or not HAS_GLASSNODE:
+        return {}
+
+    result = {}
+
+    # Запрашиваем несколько метрик параллельно
+    try:
+        active_addr, exchange_balance, sopr_data, new_addr = await asyncio.gather(
+            gn_get("/addresses/active_count", asset),        # Активные адреса
+            gn_get("/distribution/balance_exchanges", asset), # Баланс на биржах
+            gn_get("/indicators/sopr", asset),                # SOPR
+            gn_get("/addresses/new_non_zero_count", asset),   # Новые адреса
+            return_exceptions=True,
+        )
+    except Exception as e:
+        log.warning(f"GN gather error {symbol}: {e}")
+        return {}
+
+    # Парсим активные адреса (берём последнее значение)
+    if active_addr and isinstance(active_addr, list) and len(active_addr) > 0:
+        try:
+            latest = active_addr[-1]
+            val = latest.get("v")
+            if val is not None:
+                result["active_addresses"] = int(float(val))
+                # Сравниваем с предыдущим днём для тренда
+                if len(active_addr) >= 2:
+                    prev = active_addr[-2].get("v")
+                    if prev and float(prev) > 0:
+                        change = ((float(val) - float(prev)) / float(prev)) * 100
+                        result["active_addresses_change"] = round(change, 2)
+        except (ValueError, TypeError, IndexError):
+            pass
+
+    # Парсим баланс на биржах
+    if exchange_balance and isinstance(exchange_balance, list) and len(exchange_balance) > 0:
+        try:
+            latest = exchange_balance[-1]
+            val = latest.get("v")
+            if val is not None:
+                result["exchange_balance"] = float(val)
+                # Тренд: если баланс на биржах падает → бычий (выводят на холодные кошельки)
+                if len(exchange_balance) >= 2:
+                    prev = exchange_balance[-2].get("v")
+                    if prev and float(prev) > 0:
+                        change = ((float(val) - float(prev)) / float(prev)) * 100
+                        result["exchange_balance_change"] = round(change, 2)
+        except (ValueError, TypeError, IndexError):
+            pass
+
+    # Парсим SOPR (Spent Output Profit Ratio)
+    # > 1 = холдеры продают в прибыль, < 1 = продают в убыток (капитуляция)
+    if sopr_data and isinstance(sopr_data, list) and len(sopr_data) > 0:
+        try:
+            latest = sopr_data[-1]
+            val = latest.get("v")
+            if val is not None:
+                result["sopr"] = round(float(val), 4)
+        except (ValueError, TypeError, IndexError):
+            pass
+
+    # Парсим новые адреса
+    if new_addr and isinstance(new_addr, list) and len(new_addr) > 0:
+        try:
+            latest = new_addr[-1]
+            val = latest.get("v")
+            if val is not None:
+                result["new_addresses"] = int(float(val))
+        except (ValueError, TypeError, IndexError):
+            pass
+
+    if result:
+        log.info(f"  🔗 Glassnode {symbol}: {len(result)} metrics loaded")
+    else:
+        log.info(f"  🔗 Glassnode {symbol}: no data (free tier may not support)")
+
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # LLM-АНАЛИЗ (Claude API)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -326,6 +465,30 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
         except (TypeError, ValueError):
             return "нет данных"
 
+    # On-chain данные (Glassnode)
+    active_addr = coin_data.get("active_addresses")
+    active_addr_change = coin_data.get("active_addresses_change")
+    exchange_bal = coin_data.get("exchange_balance")
+    exchange_bal_change = coin_data.get("exchange_balance_change")
+    sopr = coin_data.get("sopr")
+    new_addr = coin_data.get("new_addresses")
+
+    # Блок on-chain данных для промпта
+    onchain_block = ""
+    if any([active_addr, exchange_bal, sopr, new_addr]):
+        onchain_lines = [f"\nON-CHAIN ДАННЫЕ (Glassnode):"]
+        if active_addr:
+            onchain_lines.append(f"- Активные адреса: {active_addr:,} ({safe_pct(active_addr_change)} за день)")
+        if new_addr:
+            onchain_lines.append(f"- Новые адреса: {new_addr:,}")
+        if exchange_bal:
+            direction = "выводят с бирж (бычий)" if exchange_bal_change and exchange_bal_change < 0 else "заводят на биржи (медвежий)" if exchange_bal_change and exchange_bal_change > 0 else "стабильно"
+            onchain_lines.append(f"- Баланс на биржах: {exchange_bal:,.0f} ({safe_pct(exchange_bal_change)} за день) — {direction}")
+        if sopr:
+            sopr_hint = "продают в прибыль" if sopr > 1 else "продают в убыток (капитуляция)" if sopr < 1 else "безубыток"
+            onchain_lines.append(f"- SOPR: {sopr} — {sopr_hint}")
+        onchain_block = "\n".join(onchain_lines)
+
     prompt = f"""Ты — опытный крипто-аналитик. Проанализируй данные {symbol} и дай РЕШИТЕЛЬНЫЙ анализ.
 
 ДАННЫЕ {symbol} ПРЯМО СЕЙЧАС:
@@ -335,7 +498,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 - Покупатели/Продавцы (taker): {long_pct or '?'}% / {short_pct or '?'}%
 - Ликвидации {symbol} (1ч): лонги {safe_usd(liq_long)}, шорты {safe_usd(liq_short)}
 - Ликвидации РЫНОК (1ч): лонги {safe_usd(mkt_liq_long)}, шорты {safe_usd(mkt_liq_short)}
-- Fear & Greed: {fg or '?'} ({fg_label or '?'})
+- Fear & Greed: {fg or '?'} ({fg_label or '?'}){onchain_block}
 
 ПРАВИЛА ОЦЕНКИ (следуй им строго):
 
@@ -345,6 +508,8 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 - Funding Rate отрицательный (шорты переплачивают — разворот вверх вероятен)
 - Fear & Greed < 30 (сильный страх — возможность покупки на панике)
 - Ликвидации шортов > ликвидаций лонгов в 2+ раза (шортов выдавливают)
+- Баланс на биржах падает (выводят на холодные кошельки — бычий сигнал)
+- SOPR < 1 (капитуляция — дно может быть близко)
 
 ПРОДАВАТЬ если 2+ условий совпадают:
 - Продавцы > 52% (медведи доминируют)
@@ -352,6 +517,8 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 - Funding Rate > +0.05% (лонги переплачивают — рынок перегрет)
 - Fear & Greed > 75 (сильная жадность — пора фиксировать прибыль)
 - Ликвидации лонгов > ликвидаций шортов в 2+ раза (лонги ликвидируют)
+- Баланс на биржах растёт (заводят для продажи — медвежий сигнал)
+- SOPR > 1.05 (массово фиксируют прибыль — возможна коррекция)
 
 ВЫЖИДАТЬ только если сигналы явно противоречат друг другу и нет перевеса ни в одну сторону.
 
@@ -499,6 +666,22 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
         except (ValueError, TypeError):
             pass
 
+    # 7. On-chain: баланс на биржах (Glassnode)
+    exchange_bal_change = coin_data.get("exchange_balance_change")
+    if exchange_bal_change is not None:
+        if exchange_bal_change < -0.5:
+            bull += 1  # выводят с бирж → холдят → бычий
+        elif exchange_bal_change > 0.5:
+            bear += 1  # заводят на биржи → готовятся продавать
+
+    # 8. On-chain: SOPR
+    sopr = coin_data.get("sopr")
+    if sopr is not None:
+        if sopr < 0.98:
+            bull += 1  # капитуляция → дно близко
+        elif sopr > 1.05:
+            bear += 1  # массово фиксируют прибыль
+
     # Сила = максимум из бычьих/медвежьих
     strength = max(bull, bear)
 
@@ -594,6 +777,11 @@ async def collect_all():
                 fetch_long_short(symbol),
             )
 
+            # Glassnode on-chain данные
+            gn_data = {}
+            if HAS_GLASSNODE:
+                gn_data = await fetch_glassnode_data(symbol)
+
             # Объединяем все данные
             coin_data = {
                 **price_data,
@@ -602,6 +790,7 @@ async def collect_all():
                 **ls_data,
                 **liq_data,
                 **fg_data,
+                **gn_data,
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -635,6 +824,12 @@ async def collect_all():
                 "liq_dn": fmt_usd(coin_data.get("liq_long")),
                 "mkt_liq_long": fmt_usd(total_liq_long_1h),
                 "mkt_liq_short": fmt_usd(total_liq_short_1h),
+                "active_addresses": str(coin_data.get("active_addresses", "—")),
+                "active_addresses_change": fmt_pct(coin_data.get("active_addresses_change")),
+                "exchange_balance": fmt_usd(coin_data.get("exchange_balance")) if coin_data.get("exchange_balance") else "—",
+                "exchange_balance_change": fmt_pct(coin_data.get("exchange_balance_change")),
+                "sopr": str(round(coin_data["sopr"], 4)) if coin_data.get("sopr") else "—",
+                "new_addresses": str(coin_data.get("new_addresses", "—")),
                 "exchange_flow": "—",
                 "whale_buy1h": "—",
                 "whale_buy24h": "—",
