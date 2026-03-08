@@ -211,7 +211,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     # ── ПОКУПКИ / ПРОДАЖИ (taker buy/sell ratio) ──
     if _has(long_p) or _has(short_p):
         lines.append("")
-        lines.append("<b>ПОКУПКИ / ПРОДАЖИ (4ч)</b>")
+        lines.append("<b>ПОКУПКИ / ПРОДАЖИ (1ч)</b>")
         lines.append(f"<code>покупают            {long_p}</code>")
         lines.append(f"<code>продают             {short_p}</code>")
 
@@ -219,7 +219,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     if _has(oi):
         lines.append("")
         lines.append("<b>ОТКРЫТЫЙ ИНТЕРЕС</b>")
-        lines.append(f"<code>{oi}   {oi_chg} за 4 часа</code>")
+        lines.append(f"<code>{oi}   {oi_chg} за 1 час</code>")
 
     # ── КОМИССИЯ ЗА УДЕРЖАНИЕ (Funding Rate) ──
     if _has(fr):
@@ -232,7 +232,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     has_mkt_liq  = _has(mkt_liq_long) or _has(mkt_liq_short)
     if has_coin_liq or has_mkt_liq:
         lines.append("")
-        lines.append("<b>ЛИКВИДАЦИИ (4ч)</b>")
+        lines.append("<b>ЛИКВИДАЦИИ (1ч)</b>")
         if has_coin_liq:
             lines.append(f"<code>  {coin}:</code>")
             lines.append(f"<code>  ↑ шорты (на падение)  {liq_up}</code>")

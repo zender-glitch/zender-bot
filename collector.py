@@ -176,7 +176,7 @@ async def fetch_open_interest(symbol: str) -> dict:
                 break
         if not all_item and len(data) > 0:
             total_oi = sum(float(item.get("open_interest_usd", 0) or 0) for item in data)
-            return {"oi": total_oi if total_oi > 0 else None, "oi_change_4h": None, "oi_change_24h": None}
+            return {"oi": total_oi if total_oi > 0 else None, "oi_change_1h": None, "oi_change_24h": None}
     elif isinstance(data, dict):
         all_item = data
 
@@ -184,13 +184,11 @@ async def fetch_open_interest(symbol: str) -> dict:
         return {}
 
     oi_usd = float(all_item.get("open_interest_usd", 0) or 0)
-    oi_change_4h = all_item.get("open_interest_change_percent_4h")
-    oi_change_24h = all_item.get("open_interest_change_percent_24h")
+    oi_change_1h = all_item.get("open_interest_change_percent_1h")
 
     return {
         "oi": oi_usd if oi_usd > 0 else None,
-        "oi_change_4h": float(oi_change_4h) if oi_change_4h is not None else None,
-        "oi_change_24h": float(oi_change_24h) if oi_change_24h is not None else None,
+        "oi_change_1h": float(oi_change_1h) if oi_change_1h is not None else None,
     }
 
 
@@ -229,7 +227,7 @@ async def fetch_funding_rate(symbol: str) -> dict:
 async def fetch_long_short(symbol: str) -> dict:
     data = await cg_get("/api/futures/taker-buy-sell-volume/exchange-list", {
         "symbol": symbol,
-        "range": "4h",
+        "range": "1h",
     })
     if data is None:
         return {}
@@ -302,7 +300,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     price = coin_data.get("price")
     change = coin_data.get("change_24h")
     oi = coin_data.get("oi")
-    oi_change = coin_data.get("oi_change_4h")
+    oi_change = coin_data.get("oi_change_1h")
     fr = coin_data.get("funding_rate")
     long_pct = coin_data.get("long_pct")
     short_pct = coin_data.get("short_pct")
@@ -331,11 +329,11 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 
 ДАННЫЕ {symbol}:
 - Цена: ${price}, изменение 24ч: {safe_pct(change)}
-- Открытый интерес: {safe_usd(oi)} ({safe_pct(oi_change)} за 4ч)
+- Открытый интерес: {safe_usd(oi)} ({safe_pct(oi_change)} за 1ч)
 - Funding Rate: {safe_pct(fr)}
 - Покупатели/Продавцы: {long_pct or '?'}% / {short_pct or '?'}%
-- Ликвидации {symbol} (4ч): лонги {safe_usd(liq_long)}, шорты {safe_usd(liq_short)}
-- Ликвидации РЫНОК (4ч): лонги {safe_usd(mkt_liq_long)}, шорты {safe_usd(mkt_liq_short)}
+- Ликвидации {symbol} (1ч): лонги {safe_usd(liq_long)}, шорты {safe_usd(liq_short)}
+- Ликвидации РЫНОК (1ч): лонги {safe_usd(mkt_liq_long)}, шорты {safe_usd(mkt_liq_short)}
 - Fear & Greed: {fg or '?'} ({fg_label or '?'})
 
 ОТВЕТЬ СТРОГО В ФОРМАТЕ (3 строки, без лишнего):
@@ -405,7 +403,7 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
         elif long_pct < 40:
             score -= 0.5
 
-    oi_change = coin_data.get("oi_change_4h")
+    oi_change = coin_data.get("oi_change_1h")
     if oi_change is not None:
         max_score += 1
         if oi_change > 2:
@@ -473,30 +471,30 @@ async def collect_all():
     # Ликвидации — 1 запрос на все монеты
     liq_all = await cg_get("/api/futures/liquidation/coin-list")
     liq_by_coin = {}
-    total_liq_long_4h = 0.0
-    total_liq_short_4h = 0.0
+    total_liq_long_1h = 0.0
+    total_liq_short_1h = 0.0
 
     if liq_all and isinstance(liq_all, list):
         for item in liq_all:
             sym = (item.get("symbol") or "").upper()
 
-            # Суммируем общие ликвидации рынка (ВСЕ монеты)
+            # Суммируем общие ликвидации рынка (ВСЕ монеты) — 1ч
             try:
-                ll = float(item.get("long_liquidation_usd_4h") or 0)
-                ls = float(item.get("short_liquidation_usd_4h") or 0)
-                total_liq_long_4h += ll
-                total_liq_short_4h += ls
+                ll = float(item.get("long_liquidation_usd_1h") or 0)
+                ls = float(item.get("short_liquidation_usd_1h") or 0)
+                total_liq_long_1h += ll
+                total_liq_short_1h += ls
             except (ValueError, TypeError):
                 pass
 
-            # Сохраняем по нашим монетам
+            # Сохраняем по нашим монетам — 1ч (фоллбэк на 4ч)
             if sym in COINS:
-                liq_long = item.get("long_liquidation_usd_4h")
-                liq_short = item.get("short_liquidation_usd_4h")
+                liq_long = item.get("long_liquidation_usd_1h")
+                liq_short = item.get("short_liquidation_usd_1h")
                 if liq_long is None:
-                    liq_long = item.get("long_liquidation_usd_24h")
+                    liq_long = item.get("long_liquidation_usd_4h")
                 if liq_short is None:
-                    liq_short = item.get("short_liquidation_usd_24h")
+                    liq_short = item.get("short_liquidation_usd_4h")
                 try:
                     ll_coin = float(liq_long) if liq_long is not None else None
                     ls_coin = float(liq_short) if liq_short is not None else None
@@ -508,7 +506,7 @@ async def collect_all():
                     pass
 
     if liq_by_coin:
-        log.info(f"  📊 Ликвидации: {len(liq_by_coin)} монет | Рынок 4ч: лонги {fmt_usd(total_liq_long_4h)}, шорты {fmt_usd(total_liq_short_4h)}")
+        log.info(f"  📊 Ликвидации: {len(liq_by_coin)} монет | Рынок 1ч: лонги {fmt_usd(total_liq_long_1h)}, шорты {fmt_usd(total_liq_short_1h)}")
 
     for i, symbol in enumerate(COINS):
         try:
@@ -536,8 +534,8 @@ async def collect_all():
                 **ls_data,
                 **liq_data,
                 **fg_data,
-                "mkt_liq_long": total_liq_long_4h,
-                "mkt_liq_short": total_liq_short_4h,
+                "mkt_liq_long": total_liq_long_1h,
+                "mkt_liq_short": total_liq_short_1h,
             }
 
             # Рассчитываем сигнал
@@ -559,7 +557,7 @@ async def collect_all():
                 "change": fmt_pct(coin_data.get("change_24h")),
                 "oi": fmt_usd(oi_val),
                 "oi_raw": oi_val,
-                "oi_change": fmt_pct(coin_data.get("oi_change_4h")),
+                "oi_change": fmt_pct(coin_data.get("oi_change_1h")),
                 "funding_rate": fmt_fr(coin_data.get("funding_rate")),
                 "long_pct": f"{long_pct_val}%" if long_pct_val is not None else "—",
                 "short_pct": f"{short_pct_val}%" if short_pct_val is not None else "—",
@@ -567,8 +565,8 @@ async def collect_all():
                 "short_vol": "—",
                 "liq_up": fmt_usd(coin_data.get("liq_short")),
                 "liq_dn": fmt_usd(coin_data.get("liq_long")),
-                "mkt_liq_long": fmt_usd(total_liq_long_4h),
-                "mkt_liq_short": fmt_usd(total_liq_short_4h),
+                "mkt_liq_long": fmt_usd(total_liq_long_1h),
+                "mkt_liq_short": fmt_usd(total_liq_short_1h),
                 "exchange_flow": "—",
                 "whale_buy1h": "—",
                 "whale_buy24h": "—",
