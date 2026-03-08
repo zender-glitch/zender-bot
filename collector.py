@@ -145,6 +145,7 @@ async def fetch_open_interest(symbol: str) -> dict:
     """
     Открытый интерес по всем биржам (агрегированный).
     Coinglass v4: /api/futures/open-interest/exchange-list (kebab-case!)
+    OI change считаем сами: сравниваем с предыдущим значением из Supabase.
     """
     data = await cg_get("/api/futures/open-interest/exchange-list", {"symbol": symbol})
     if not data:
@@ -157,32 +158,25 @@ async def fetch_open_interest(symbol: str) -> dict:
     elif isinstance(data, dict):
         total_oi = float(data.get("openInterest", 0) or data.get("oi", 0) or 0)
 
-    # История OI для расчёта изменения за 4ч
-    # Coinglass v4: openInterest camelCase (не kebab!) + /history суффикс
-    history = await cg_get("/api/futures/openInterest/ohlc-history", {
-        "symbol": symbol,
-        "interval": "4h",
-        "limit": 2,
-    })
-    # Фоллбэк: агрегированная история
-    if not history:
-        history = await cg_get("/api/futures/openInterest/aggregated-ohlc-history", {
-            "symbol": symbol,
-            "interval": "4h",
-            "limit": 2,
-        })
+    # OI change: считаем из предыдущего значения в Supabase
     oi_change_4h = None
-    if history and isinstance(history, list) and len(history) >= 2:
+    if total_oi > 0:
         try:
-            prev = float(history[-2].get("c", 0) or history[-2].get("close", 0) or 0)
-            curr = float(history[-1].get("c", 0) or history[-1].get("close", 0) or 0)
-            if prev > 0:
-                oi_change_4h = ((curr - prev) / prev) * 100
-        except (ValueError, TypeError, IndexError):
-            pass
+            prev = db.client.table("market_data") \
+                .select("oi_raw, updated_at") \
+                .eq("coin", symbol) \
+                .single() \
+                .execute()
+            if prev.data and prev.data.get("oi_raw"):
+                prev_oi = float(prev.data["oi_raw"])
+                if prev_oi > 0:
+                    oi_change_4h = ((total_oi - prev_oi) / prev_oi) * 100
+        except Exception as e:
+            log.debug(f"OI change calc {symbol}: {e}")
 
     return {
         "oi": total_oi if total_oi > 0 else None,
+        "oi_raw": total_oi if total_oi > 0 else None,
         "oi_change_4h": oi_change_4h,
     }
 
@@ -460,6 +454,7 @@ async def collect_all():
                 "price": fmt_price(coin_data.get("price")),
                 "change": fmt_pct(coin_data.get("change_24h")),
                 "oi": fmt_usd(oi_val),
+                "oi_raw": oi_val,  # числовое значение для расчёта OI change
                 "oi_change": fmt_pct(coin_data.get("oi_change_4h")),
                 "funding_rate": fmt_pct(coin_data.get("funding_rate")),
                 "long_pct": f"{long_pct_val}%" if long_pct_val else "—",
