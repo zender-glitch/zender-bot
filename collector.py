@@ -111,7 +111,6 @@ async def cg_get(path: str, params: dict = None) -> dict | None:
 async def fetch_prices() -> dict:
     """
     Цены всех монет через CoinGecko (бесплатно, без ключа).
-    Binance блокирует US серверы (Railway us-west2), поэтому CoinGecko.
     Возвращает: {BTC: {price, change_24h}, ETH: {...}, ...}
     """
     ids = ",".join(COINGECKO_IDS.values())
@@ -143,76 +142,80 @@ async def fetch_prices() -> dict:
 
 async def fetch_open_interest(symbol: str) -> dict:
     """
-    Открытый интерес по всем биржам (агрегированный).
-    Coinglass v4: /api/futures/open-interest/exchange-list (kebab-case!)
-    OI change считаем сами: сравниваем с предыдущим значением из Supabase.
+    Открытый интерес по всем биржам.
+    Реальные поля API v4:
+      open_interest_usd, open_interest_change_percent_4h, open_interest_change_percent_24h
+    Есть запись с exchange='All' — это агрегат по всем биржам.
     """
     data = await cg_get("/api/futures/open-interest/exchange-list", {"symbol": symbol})
     if not data:
         return {}
 
-    # DEBUG: показать структуру ответа для BTC
-    if symbol == "BTC":
-        if isinstance(data, list) and len(data) > 0:
-            log.info(f"  🔍 DEBUG OI keys: {list(data[0].keys())}")
-            log.info(f"  🔍 DEBUG OI first: {data[0]}")
-        elif isinstance(data, dict):
-            log.info(f"  🔍 DEBUG OI dict keys: {list(data.keys())}")
-
-    total_oi = 0
+    # Ищем агрегированную запись (exchange = "All")
+    all_item = None
     if isinstance(data, list):
         for item in data:
-            total_oi += float(item.get("openInterest", 0) or item.get("oi", 0) or 0)
+            if item.get("exchange") == "All":
+                all_item = item
+                break
+        # Если нет "All" — суммируем вручную
+        if not all_item and len(data) > 0:
+            total_oi = sum(float(item.get("open_interest_usd", 0) or 0) for item in data)
+            return {
+                "oi": total_oi if total_oi > 0 else None,
+                "oi_change_4h": None,
+                "oi_change_24h": None,
+            }
     elif isinstance(data, dict):
-        total_oi = float(data.get("openInterest", 0) or data.get("oi", 0) or 0)
+        all_item = data
 
-    # OI change: считаем из предыдущего значения в Supabase
-    oi_change_4h = None
-    if total_oi > 0:
-        try:
-            prev = db.client.table("market_data") \
-                .select("oi_raw, updated_at") \
-                .eq("coin", symbol) \
-                .single() \
-                .execute()
-            if prev.data and prev.data.get("oi_raw"):
-                prev_oi = float(prev.data["oi_raw"])
-                if prev_oi > 0:
-                    oi_change_4h = ((total_oi - prev_oi) / prev_oi) * 100
-        except Exception as e:
-            log.debug(f"OI change calc {symbol}: {e}")
+    if not all_item:
+        return {}
+
+    oi_usd = float(all_item.get("open_interest_usd", 0) or 0)
+    oi_change_4h = all_item.get("open_interest_change_percent_4h")
+    oi_change_24h = all_item.get("open_interest_change_percent_24h")
 
     return {
-        "oi": total_oi if total_oi > 0 else None,
-        "oi_raw": total_oi if total_oi > 0 else None,
-        "oi_change_4h": oi_change_4h,
+        "oi": oi_usd if oi_usd > 0 else None,
+        "oi_change_4h": float(oi_change_4h) if oi_change_4h is not None else None,
+        "oi_change_24h": float(oi_change_24h) if oi_change_24h is not None else None,
     }
 
 
 async def fetch_funding_rate(symbol: str) -> dict:
     """
-    Текущий Funding Rate по биржам.
-    Coinglass v4: /api/futures/funding-rate/exchange-list (kebab-case!)
+    Funding Rate по биржам.
+    Реальная структура API v4:
+      {symbol, stablecoin_margin_list: [{exchange, funding_rate, ...}], token_margin_list: [...]}
+    Данные вложены в списки по типу маржи.
     """
     data = await cg_get("/api/futures/funding-rate/exchange-list", {"symbol": symbol})
     if not data:
         return {}
 
-    # DEBUG: показать структуру ответа для BTC
-    if symbol == "BTC":
-        if isinstance(data, list) and len(data) > 0:
-            log.info(f"  🔍 DEBUG FR keys: {list(data[0].keys())}")
-            log.info(f"  🔍 DEBUG FR first: {data[0]}")
-        elif isinstance(data, dict):
-            log.info(f"  🔍 DEBUG FR dict keys: {list(data.keys())}")
+    # data может быть списком (1 элемент) или словарём
+    item = data[0] if isinstance(data, list) and len(data) > 0 else data
+    if not isinstance(item, dict):
+        return {}
 
     rates = []
-    items = data if isinstance(data, list) else [data]
-    for item in items:
-        rate = item.get("rate") or item.get("fundingRate") or item.get("currentFundingRate")
-        if rate is not None:
+
+    # Собираем funding_rate из stablecoin_margin_list
+    for entry in item.get("stablecoin_margin_list", []):
+        fr = entry.get("funding_rate")
+        if fr is not None:
             try:
-                rates.append(float(rate))
+                rates.append(float(fr))
+            except (ValueError, TypeError):
+                pass
+
+    # Также из token_margin_list
+    for entry in item.get("token_margin_list", []):
+        fr = entry.get("funding_rate")
+        if fr is not None:
+            try:
+                rates.append(float(fr))
             except (ValueError, TypeError):
                 pass
 
@@ -226,9 +229,8 @@ async def fetch_funding_rate(symbol: str) -> dict:
 async def fetch_long_short(symbol: str) -> dict:
     """
     Long/Short Account Ratio.
-    Пробуем несколько путей т.к. API v4 может иметь разные варианты.
+    Coinglass v4: пути требуют /history суффикс.
     """
-    # Coinglass v4: все long-short пути требуют /history суффикс!
     paths = [
         "/api/futures/global-long-short-account-ratio/history",
         "/api/futures/top-long-short-account-ratio/history",
@@ -238,7 +240,6 @@ async def fetch_long_short(symbol: str) -> dict:
     for path in paths:
         data = await cg_get(path, {"symbol": symbol, "interval": "1h", "limit": 1})
         if data:
-            log.info(f"  ✅ L/S ratio {symbol}: found via {path}")
             break
     else:
         return {}
@@ -251,26 +252,34 @@ async def fetch_long_short(symbol: str) -> dict:
         else:
             return {}
 
-        # DEBUG: показать структуру ответа для BTC
+        # DEBUG: логируем поля для отладки
         if symbol == "BTC":
             log.info(f"  🔍 DEBUG L/S keys: {list(item.keys())}")
             log.info(f"  🔍 DEBUG L/S item: {item}")
 
-        # Пробуем разные имена полей
+        # Пробуем разные имена полей (snake_case и camelCase)
         long_ratio = float(
-            item.get("longRate", 0) or item.get("longAccount", 0) or
-            item.get("longRatio", 0) or item.get("buyRatio", 0) or 0
+            item.get("long_rate", 0) or item.get("longRate", 0) or
+            item.get("long_account", 0) or item.get("longAccount", 0) or
+            item.get("long_ratio", 0) or item.get("longRatio", 0) or
+            item.get("buy_ratio", 0) or item.get("buyRatio", 0) or 0
         )
         short_ratio = float(
-            item.get("shortRate", 0) or item.get("shortAccount", 0) or
-            item.get("shortRatio", 0) or item.get("sellRatio", 0) or 0
+            item.get("short_rate", 0) or item.get("shortRate", 0) or
+            item.get("short_account", 0) or item.get("shortAccount", 0) or
+            item.get("short_ratio", 0) or item.get("shortRatio", 0) or
+            item.get("sell_ratio", 0) or item.get("sellRatio", 0) or 0
         )
 
         if long_ratio == 0 and short_ratio == 0:
             return {}
 
-        # Нормализуем
-        if long_ratio > 0 and long_ratio < 10 and short_ratio > 0 and short_ratio < 10:
+        # Нормализуем в проценты
+        if long_ratio > 0 and long_ratio <= 1 and short_ratio > 0 and short_ratio <= 1:
+            # Значения 0-1 → конвертируем в %
+            long_pct = long_ratio * 100
+            short_pct = short_ratio * 100
+        elif long_ratio > 0 and long_ratio < 10 and short_ratio > 0 and short_ratio < 10:
             total = long_ratio + short_ratio
             long_pct = (long_ratio / total) * 100
             short_pct = (short_ratio / total) * 100
@@ -289,7 +298,6 @@ async def fetch_long_short(symbol: str) -> dict:
 async def fetch_liquidations(symbol: str) -> dict:
     """
     Ликвидации за последние 4 часа.
-    Этот эндпоинт работает: /api/futures/liquidation/history
     """
     data = await cg_get("/api/futures/liquidation/history", {
         "symbol": symbol,
@@ -307,18 +315,21 @@ async def fetch_liquidations(symbol: str) -> dict:
         else:
             return {}
 
-        # DEBUG: показать структуру ответа для BTC
+        # DEBUG: логируем поля для отладки
         if symbol == "BTC":
             log.info(f"  🔍 DEBUG LIQ keys: {list(item.keys())}")
             log.info(f"  🔍 DEBUG LIQ item: {item}")
 
+        # Пробуем snake_case и camelCase
         liq_long = float(
-            item.get("longLiquidationUsd", 0) or item.get("buyVolUsd", 0) or
-            item.get("longVolUsd", 0) or 0
+            item.get("long_liquidation_usd", 0) or item.get("longLiquidationUsd", 0) or
+            item.get("buy_vol_usd", 0) or item.get("buyVolUsd", 0) or
+            item.get("long_vol_usd", 0) or item.get("longVolUsd", 0) or 0
         )
         liq_short = float(
-            item.get("shortLiquidationUsd", 0) or item.get("sellVolUsd", 0) or
-            item.get("shortVolUsd", 0) or 0
+            item.get("short_liquidation_usd", 0) or item.get("shortLiquidationUsd", 0) or
+            item.get("sell_vol_usd", 0) or item.get("sellVolUsd", 0) or
+            item.get("short_vol_usd", 0) or item.get("shortVolUsd", 0) or 0
         )
 
         return {
@@ -330,9 +341,7 @@ async def fetch_liquidations(symbol: str) -> dict:
 
 
 async def fetch_fear_greed() -> dict:
-    """
-    Fear & Greed Index (бесплатный, Alternative.me).
-    """
+    """Fear & Greed Index (бесплатный, Alternative.me)."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get("https://api.alternative.me/fng/?limit=1")
@@ -472,19 +481,19 @@ async def collect_all():
 
             # Формируем запись для Supabase
             oi_val = coin_data.get("oi")
-            long_pct_val = coin_data.get("long_pct", 50)
-            short_pct_val = coin_data.get("short_pct", 50)
+            long_pct_val = coin_data.get("long_pct")
+            short_pct_val = coin_data.get("short_pct")
 
             record = {
                 "coin": symbol,
                 "price": fmt_price(coin_data.get("price")),
                 "change": fmt_pct(coin_data.get("change_24h")),
                 "oi": fmt_usd(oi_val),
-                "oi_raw": oi_val,  # числовое значение для расчёта OI change
+                "oi_raw": oi_val,
                 "oi_change": fmt_pct(coin_data.get("oi_change_4h")),
                 "funding_rate": fmt_pct(coin_data.get("funding_rate")),
-                "long_pct": f"{long_pct_val}%" if long_pct_val else "—",
-                "short_pct": f"{short_pct_val}%" if short_pct_val else "—",
+                "long_pct": f"{long_pct_val}%" if long_pct_val is not None else "—",
+                "short_pct": f"{short_pct_val}%" if short_pct_val is not None else "—",
                 "long_vol": fmt_usd(oi_val * (long_pct_val / 100)) if oi_val and long_pct_val else "—",
                 "short_vol": fmt_usd(oi_val * (short_pct_val / 100)) if oi_val and short_pct_val else "—",
                 "liq_up": fmt_usd(coin_data.get("liq_short")),
@@ -503,7 +512,7 @@ async def collect_all():
 
             # Сохраняем в Supabase
             await db.upsert_market_data(record)
-            log.info(f"  ✅ {symbol}: {record['price']} {record['change']} | {signal_bar} {signal_label}")
+            log.info(f"  ✅ {symbol}: {record['price']} {record['change']} | OI:{record['oi']} | FR:{record['funding_rate']} | L/S:{record['long_pct']}/{record['short_pct']} | {signal_bar} {signal_label}")
 
         except Exception as e:
             log.error(f"  ❌ {symbol} error: {e}")
