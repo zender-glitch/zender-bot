@@ -253,7 +253,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             lines.append(f"<code>  ↑ шорты   {mkt_liq_short}</code>")
             lines.append(f"<code>  ↓ лонги   {mkt_liq_long}</code>")
 
-    # ── ON-CHAIN (Glassnode) ──
+    # ── ON-CHAIN ──
     active_addr = d.get("active_addresses", "—")
     active_addr_chg = d.get("active_addresses_change", "—")
     exchange_bal = d.get("exchange_balance", "—")
@@ -264,7 +264,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     has_onchain = _has(active_addr) or _has(exchange_bal) or _has(sopr_val)
     if has_onchain:
         lines.append("")
-        lines.append("<b>ON-CHAIN (Glassnode)</b>")
+        lines.append("<b>ON-CHAIN</b>")
         if _has(active_addr):
             addr_arrow = _arrow(active_addr_chg)
             lines.append(f"<code>  👥 адреса    {active_addr} {addr_arrow} {active_addr_chg}</code>")

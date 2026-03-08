@@ -22,13 +22,7 @@ except (ImportError, AttributeError):
     ANTHROPIC_KEY = None
     HAS_ANTHROPIC = False
 
-# Glassnode API (on-chain данные)
-try:
-    from config import GLASSNODE_API_KEY
-    HAS_GLASSNODE = bool(GLASSNODE_API_KEY)
-except (ImportError, AttributeError):
-    GLASSNODE_API_KEY = None
-    HAS_GLASSNODE = False
+# On-chain: бесплатные API (blockchain.info + BGeometrics), без ключа
 
 from database import db
 
@@ -295,132 +289,150 @@ async def fetch_fear_greed() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GLASSNODE ON-CHAIN DATA
+# ON-CHAIN DATA (Blockchain.info + BGeometrics — бесплатно, без API ключа)
 # ══════════════════════════════════════════════════════════════════════════════
 
-GN_BASE = "https://api.glassnode.com/v1/metrics"
+# Blockchain.info Charts API — бесплатный, без ключа, только BTC
+# Формат: https://api.blockchain.info/charts/{metric}?timespan=2days&format=json
+# Возвращает: {"values": [{"x": timestamp, "y": value}, ...]}
 
-# Маппинг наших символов → Glassnode asset codes
-GLASSNODE_ASSETS = {
-    "BTC": "BTC",
-    "ETH": "ETH",
-    # SOL, BNB, AVAX — ограниченная поддержка on-chain, пробуем
-    "SOL": "SOL",
-    "BNB": "BNB",
-    "AVAX": None,  # не поддерживается
-}
+# BGeometrics API — бесплатный, без ключа, BTC on-chain
+# Формат: https://charts.bgeometrics.com/data/{metric}.json
+
+BLOCKCHAIN_INFO_BASE = "https://api.blockchain.info/charts"
+BGEOMETRICS_BASE = "https://charts.bgeometrics.com/data"
 
 
-async def gn_get(path: str, asset: str) -> dict | list | None:
-    """Запрос к Glassnode API. Возвращает data или None."""
-    if not HAS_GLASSNODE:
-        return None
-    url = f"{GN_BASE}{path}"
-    params = {"a": asset, "api_key": GLASSNODE_API_KEY}
+async def blockchain_chart_get(metric: str) -> list | None:
+    """Запрос к Blockchain.info Charts API. Возвращает values или None."""
+    url = f"{BLOCKCHAIN_INFO_BASE}/{metric}"
+    params = {"timespan": "2days", "format": "json", "rollingAverage": "24hours"}
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(url, params=params)
-            if resp.status_code == 401:
-                log.warning(f"GN 401 (bad API key) {path}")
-                return None
-            if resp.status_code == 403:
-                log.warning(f"GN 403 (tier limit) {path} for {asset}")
-                return None
-            if resp.status_code == 429:
-                log.warning(f"GN 429 (rate limit) {path}")
-                return None
             if resp.status_code != 200:
-                log.warning(f"GN {resp.status_code} {path}")
+                log.warning(f"Blockchain.info {resp.status_code} {metric}")
                 return None
             data = resp.json()
-            return data
+            return data.get("values", [])
     except Exception as e:
-        log.error(f"GN request {path}: {e}")
+        log.error(f"Blockchain.info {metric}: {e}")
         return None
 
 
-async def fetch_glassnode_data(symbol: str) -> dict:
+async def bgeometrics_get(metric: str) -> list | None:
+    """Запрос к BGeometrics API. Возвращает data или None."""
+    url = f"{BGEOMETRICS_BASE}/{metric}.json"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                log.warning(f"BGeometrics {resp.status_code} {metric}")
+                return None
+            data = resp.json()
+            # BGeometrics может возвращать list или dict с values
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and "values" in data:
+                return data["values"]
+            return None
+    except Exception as e:
+        log.error(f"BGeometrics {metric}: {e}")
+        return None
+
+
+def parse_chart_values(values: list | None) -> tuple:
+    """Извлекает последнее значение и % изменения из массива [{x,y}]."""
+    if not values or not isinstance(values, list) or len(values) < 1:
+        return None, None
+    try:
+        latest = values[-1]
+        if isinstance(latest, dict):
+            val = latest.get("y") or latest.get("v") or latest.get("value")
+        elif isinstance(latest, (list, tuple)) and len(latest) >= 2:
+            val = latest[1]
+        else:
+            val = None
+
+        if val is None:
+            return None, None
+        val = float(val)
+
+        change = None
+        if len(values) >= 2:
+            prev_entry = values[-2]
+            if isinstance(prev_entry, dict):
+                prev = prev_entry.get("y") or prev_entry.get("v") or prev_entry.get("value")
+            elif isinstance(prev_entry, (list, tuple)) and len(prev_entry) >= 2:
+                prev = prev_entry[1]
+            else:
+                prev = None
+            if prev and float(prev) > 0:
+                change = round(((val - float(prev)) / float(prev)) * 100, 2)
+
+        return val, change
+    except (ValueError, TypeError, IndexError):
+        return None, None
+
+
+async def fetch_onchain_data(symbol: str) -> dict:
     """
-    Получает on-chain метрики из Glassnode для монеты.
-    Бесплатный tier: daily resolution, Tier 1 метрики.
-    Возвращает dict с on-chain данными.
+    On-chain метрики для BTC (бесплатные API, без ключа).
+    Blockchain.info: активные адреса, транзакции.
+    BGeometrics: SOPR, баланс на биржах.
+    Для не-BTC монет — пустой dict.
     """
-    asset = GLASSNODE_ASSETS.get(symbol)
-    if not asset or not HAS_GLASSNODE:
+    if symbol != "BTC":
         return {}
 
     result = {}
 
-    # Запрашиваем несколько метрик параллельно
     try:
-        active_addr, exchange_balance, sopr_data, new_addr = await asyncio.gather(
-            gn_get("/addresses/active_count", asset),        # Активные адреса
-            gn_get("/distribution/balance_exchanges", asset), # Баланс на биржах
-            gn_get("/indicators/sopr", asset),                # SOPR
-            gn_get("/addresses/new_non_zero_count", asset),   # Новые адреса
+        active_data, tx_data, sopr_data, exch_data = await asyncio.gather(
+            blockchain_chart_get("n-unique-addresses"),
+            blockchain_chart_get("n-transactions"),
+            bgeometrics_get("sopr"),
+            bgeometrics_get("balance_exchanges"),
             return_exceptions=True,
         )
     except Exception as e:
-        log.warning(f"GN gather error {symbol}: {e}")
+        log.warning(f"On-chain gather error: {e}")
         return {}
 
-    # Парсим активные адреса (берём последнее значение)
-    if active_addr and isinstance(active_addr, list) and len(active_addr) > 0:
-        try:
-            latest = active_addr[-1]
-            val = latest.get("v")
-            if val is not None:
-                result["active_addresses"] = int(float(val))
-                # Сравниваем с предыдущим днём для тренда
-                if len(active_addr) >= 2:
-                    prev = active_addr[-2].get("v")
-                    if prev and float(prev) > 0:
-                        change = ((float(val) - float(prev)) / float(prev)) * 100
-                        result["active_addresses_change"] = round(change, 2)
-        except (ValueError, TypeError, IndexError):
-            pass
+    # Обработка исключений из gather
+    if isinstance(active_data, Exception):
+        active_data = None
+    if isinstance(tx_data, Exception):
+        tx_data = None
+    if isinstance(sopr_data, Exception):
+        sopr_data = None
+    if isinstance(exch_data, Exception):
+        exch_data = None
 
-    # Парсим баланс на биржах
-    if exchange_balance and isinstance(exchange_balance, list) and len(exchange_balance) > 0:
-        try:
-            latest = exchange_balance[-1]
-            val = latest.get("v")
-            if val is not None:
-                result["exchange_balance"] = float(val)
-                # Тренд: если баланс на биржах падает → бычий (выводят на холодные кошельки)
-                if len(exchange_balance) >= 2:
-                    prev = exchange_balance[-2].get("v")
-                    if prev and float(prev) > 0:
-                        change = ((float(val) - float(prev)) / float(prev)) * 100
-                        result["exchange_balance_change"] = round(change, 2)
-        except (ValueError, TypeError, IndexError):
-            pass
+    val, change = parse_chart_values(active_data)
+    if val:
+        result["active_addresses"] = int(val)
+        if change is not None:
+            result["active_addresses_change"] = change
 
-    # Парсим SOPR (Spent Output Profit Ratio)
-    # > 1 = холдеры продают в прибыль, < 1 = продают в убыток (капитуляция)
-    if sopr_data and isinstance(sopr_data, list) and len(sopr_data) > 0:
-        try:
-            latest = sopr_data[-1]
-            val = latest.get("v")
-            if val is not None:
-                result["sopr"] = round(float(val), 4)
-        except (ValueError, TypeError, IndexError):
-            pass
+    val, change = parse_chart_values(tx_data)
+    if val:
+        result["tx_count"] = int(val)
 
-    # Парсим новые адреса
-    if new_addr and isinstance(new_addr, list) and len(new_addr) > 0:
-        try:
-            latest = new_addr[-1]
-            val = latest.get("v")
-            if val is not None:
-                result["new_addresses"] = int(float(val))
-        except (ValueError, TypeError, IndexError):
-            pass
+    val, _ = parse_chart_values(sopr_data)
+    if val:
+        result["sopr"] = round(val, 4)
+
+    val, change = parse_chart_values(exch_data)
+    if val:
+        result["exchange_balance"] = val
+        if change is not None:
+            result["exchange_balance_change"] = change
 
     if result:
-        log.info(f"  🔗 Glassnode {symbol}: {len(result)} metrics loaded")
+        log.info(f"  🔗 On-chain BTC: {list(result.keys())}")
     else:
-        log.info(f"  🔗 Glassnode {symbol}: no data (free tier may not support)")
+        log.info(f"  🔗 On-chain BTC: no data (APIs may be unavailable)")
 
     return result
 
@@ -465,7 +477,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
         except (TypeError, ValueError):
             return "нет данных"
 
-    # On-chain данные (Glassnode)
+    # On-chain данные
     active_addr = coin_data.get("active_addresses")
     active_addr_change = coin_data.get("active_addresses_change")
     exchange_bal = coin_data.get("exchange_balance")
@@ -476,7 +488,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     # Блок on-chain данных для промпта
     onchain_block = ""
     if any([active_addr, exchange_bal, sopr, new_addr]):
-        onchain_lines = [f"\nON-CHAIN ДАННЫЕ (Glassnode):"]
+        onchain_lines = [f"\nON-CHAIN ДАННЫЕ (BTC блокчейн):"]
         if active_addr:
             onchain_lines.append(f"- Активные адреса: {active_addr:,} ({safe_pct(active_addr_change)} за день)")
         if new_addr:
@@ -777,10 +789,8 @@ async def collect_all():
                 fetch_long_short(symbol),
             )
 
-            # Glassnode on-chain данные
-            gn_data = {}
-            if HAS_GLASSNODE:
-                gn_data = await fetch_glassnode_data(symbol)
+            # On-chain данные (бесплатно, без ключа)
+            gn_data = await fetch_onchain_data(symbol)
 
             # Объединяем все данные
             coin_data = {
