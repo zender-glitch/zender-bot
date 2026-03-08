@@ -118,13 +118,13 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
 
 
 def _arrow(change_str: str) -> str:
-    """Эмодзи-стрелка: 🟢 рост, 🔴 падение, ➡️ без изменений"""
+    """Треугольник: 🔺 рост, 🔻 падение, ▸ без изменений"""
     s = str(change_str).strip()
     if s.startswith("+") and s != "+0.00%":
-        return "🟢"
+        return "🔺"
     elif s.startswith("-") and s != "-0.00%":
-        return "🔴"
-    return "➡️"
+        return "🔻"
+    return "▸"
 
 
 def _has(val) -> bool:
@@ -212,8 +212,8 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     if _has(long_p) or _has(short_p):
         lines.append("")
         lines.append("<b>ЛОНГ / ШОРТ (4ч)</b>")
-        lines.append(f"🟢 <code>лонг    {long_p}</code>")
-        lines.append(f"🔴 <code>шорт    {short_p}</code>")
+        lines.append(f"🔺 <code>лонг    {long_p}</code>")
+        lines.append(f"🔻 <code>шорт    {short_p}</code>")
 
     # ── ОТКРЫТЫЙ ИНТЕРЕС ──
     if _has(oi):
@@ -305,9 +305,9 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     if buy_zone or sell_zone:
         lines.append("")
         if buy_zone:
-            lines.append(f"<code>🟢 Зона покупки:  {buy_zone}</code>")
+            lines.append(f"🔺 <code>Зона покупки:  {buy_zone}</code>")
         if sell_zone:
-            lines.append(f"<code>🔴 Зона продажи:  {sell_zone}</code>")
+            lines.append(f"🔻 <code>Зона продажи:  {sell_zone}</code>")
 
     lines.append("")
     lines.append("⚡ <b>Zender Commander Terminal</b> · t.me/ZenderCommander_bot")
@@ -337,7 +337,7 @@ async def cmd_summary(message: Message):
     """Сводка по монетам"""
     user_id = message.from_user.id
     user = await db.get_user(user_id)
-    coins = user.get("coins", COINS[:1]) if user else COINS[:1]
+    coins = user.get("coins", COINS) if user else COINS
     data  = await db.get_market_data(coins)
     await message.answer(
         text_summary(coins, data),
@@ -389,7 +389,7 @@ async def cmd_status(message: Message):
 async def cb_summary(call: CallbackQuery):
     user_id = call.from_user.id
     user    = await db.get_user(user_id)
-    coins   = user.get("coins", COINS[:1]) if user else COINS[:1]
+    coins   = user.get("coins", COINS) if user else COINS
     data    = await db.get_market_data(coins)
     await call.message.edit_text(
         text_summary(coins, data),
