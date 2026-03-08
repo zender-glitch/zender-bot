@@ -211,7 +211,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     # ── ПОКУПКИ / ПРОДАЖИ (taker buy/sell ratio) ──
     if _has(long_p) or _has(short_p):
         lines.append("")
-        lines.append("<b>ПОКУПКИ / ПРОДАЖИ (1ч)</b>")
+        lines.append("<b>ПОКУПКИ / ПРОДАЖИ (4ч)</b>")
         lines.append(f"<code>покупают            {long_p}</code>")
         lines.append(f"<code>продают             {short_p}</code>")
 

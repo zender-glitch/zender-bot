@@ -227,7 +227,7 @@ async def fetch_funding_rate(symbol: str) -> dict:
 async def fetch_long_short(symbol: str) -> dict:
     data = await cg_get("/api/futures/taker-buy-sell-volume/exchange-list", {
         "symbol": symbol,
-        "range": "1h",
+        "range": "4h",
     })
     if data is None:
         log.warning(f"  L/S {symbol}: data is None")
