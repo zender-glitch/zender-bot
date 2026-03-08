@@ -313,16 +313,30 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     mkt_liq_long = coin_data.get("mkt_liq_long")
     mkt_liq_short = coin_data.get("mkt_liq_short")
 
+    # Безопасное форматирование (None → "нет данных")
+    def safe_usd(v):
+        try:
+            return f"${float(v):,.0f}"
+        except (TypeError, ValueError):
+            return "нет данных"
+
+    def safe_pct(v):
+        try:
+            val = float(v)
+            return f"{'+' if val > 0 else ''}{val:.2f}%"
+        except (TypeError, ValueError):
+            return "нет данных"
+
     prompt = f"""Ты — крипто-аналитик. Проанализируй данные {symbol} и дай краткий анализ на русском языке.
 
 ДАННЫЕ {symbol}:
-- Цена: ${price}, изменение 24ч: {change}%
-- Открытый интерес: ${oi:,.0f} ({'+' if oi_change and oi_change > 0 else ''}{oi_change}% за 4ч)
-- Funding Rate: {fr:.4f}%
-- Покупатели/Продавцы: {long_pct}% / {short_pct}%
-- Ликвидации {symbol} (4ч): лонги ${liq_long:,.0f}, шорты ${liq_short:,.0f}
-- Ликвидации РЫНОК (4ч): лонги ${mkt_liq_long:,.0f}, шорты ${mkt_liq_short:,.0f}
-- Fear & Greed: {fg} ({fg_label})
+- Цена: ${price}, изменение 24ч: {safe_pct(change)}
+- Открытый интерес: {safe_usd(oi)} ({safe_pct(oi_change)} за 4ч)
+- Funding Rate: {safe_pct(fr)}
+- Покупатели/Продавцы: {long_pct or '?'}% / {short_pct or '?'}%
+- Ликвидации {symbol} (4ч): лонги {safe_usd(liq_long)}, шорты {safe_usd(liq_short)}
+- Ликвидации РЫНОК (4ч): лонги {safe_usd(mkt_liq_long)}, шорты {safe_usd(mkt_liq_short)}
+- Fear & Greed: {fg or '?'} ({fg_label or '?'})
 
 ОТВЕТЬ СТРОГО В ФОРМАТЕ (3 строки, без лишнего):
 АНАЛИЗ: [2-3 предложения простым языком, без сленга, описывай что происходит на рынке]
@@ -339,7 +353,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
                     "content-type": "application/json",
                 },
                 json={
-                    "model": "claude-3-haiku-20240307",
+                    "model": "claude-haiku-4-5-20251001",
                     "max_tokens": 300,
                     "messages": [{"role": "user", "content": prompt}],
                 }
