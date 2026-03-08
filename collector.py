@@ -384,20 +384,44 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             data = resp.json()
             text = data["content"][0]["text"].strip()
 
-            # Парсим ответ
+            # Парсим ответ (гибкий парсинг — ловим разные форматы)
             result = {}
             for line in text.split("\n"):
-                line = line.strip()
-                if line.startswith("АНАЛИЗ:"):
-                    result["llm_text"] = line.replace("АНАЛИЗ:", "").strip()
-                elif line.startswith("РЕКОМЕНДАЦИЯ:"):
-                    result["recommendation"] = line.replace("РЕКОМЕНДАЦИЯ:", "").strip()
-                elif line.startswith("ЗОНЫ:"):
-                    zones = line.replace("ЗОНЫ:", "").strip()
-                    parts = zones.split("|")
+                clean = line.strip().lstrip("*").lstrip("#").strip()
+                upper = clean.upper()
+
+                if upper.startswith("АНАЛИЗ:") or upper.startswith("АНАЛИЗ :"):
+                    val = clean.split(":", 1)[1].strip() if ":" in clean else ""
+                    if val:
+                        result["llm_text"] = val
+                elif upper.startswith("РЕКОМЕНДАЦИЯ:") or upper.startswith("РЕКОМЕНДАЦИЯ :"):
+                    val = clean.split(":", 1)[1].strip().lower() if ":" in clean else ""
+                    if val:
+                        result["recommendation"] = val
+                elif upper.startswith("ЗОНЫ:") or upper.startswith("ЗОНЫ :"):
+                    val = clean.split(":", 1)[1].strip() if ":" in clean else ""
+                    parts = val.split("|")
                     if len(parts) >= 2:
-                        result["buy_zone"] = parts[0].replace("покупка", "").strip()
-                        result["sell_zone"] = parts[1].replace("продажа", "").strip()
+                        result["buy_zone"] = parts[0].replace("покупка", "").replace("Покупка", "").strip()
+                        result["sell_zone"] = parts[1].replace("продажа", "").replace("Продажа", "").strip()
+
+            # Fallback: ищем ключевые слова в тексте если парсер не нашёл
+            if not result.get("recommendation"):
+                text_lower = text.lower()
+                if "покупать" in text_lower:
+                    result["recommendation"] = "покупать"
+                elif "продавать" in text_lower:
+                    result["recommendation"] = "продавать"
+                elif "выжидать" in text_lower:
+                    result["recommendation"] = "выжидать"
+
+            if not result.get("llm_text") and text:
+                # Берём первое осмысленное предложение как анализ
+                for line in text.split("\n"):
+                    clean = line.strip().lstrip("*").strip()
+                    if len(clean) > 20 and not clean.upper().startswith(("РЕКОМЕНДАЦИЯ", "ЗОНЫ")):
+                        result["llm_text"] = clean.split(":", 1)[1].strip() if ":" in clean and clean.upper().startswith("АНАЛИЗ") else clean
+                        break
 
             if result.get("llm_text"):
                 log.info(f"  🤖 LLM {symbol}: {result.get('recommendation', '?')}")

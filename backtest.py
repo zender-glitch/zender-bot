@@ -193,13 +193,32 @@ async def call_llm(prompt: str) -> dict:
 
             result = {}
             for line in text.split("\n"):
-                line = line.strip()
-                if line.startswith("АНАЛИЗ:"):
-                    result["analysis"] = line.replace("АНАЛИЗ:", "").strip()
-                elif line.startswith("РЕКОМЕНДАЦИЯ:"):
-                    result["recommendation"] = line.replace("РЕКОМЕНДАЦИЯ:", "").strip().lower()
-                elif line.startswith("ЗОНЫ:"):
-                    result["zones"] = line.replace("ЗОНЫ:", "").strip()
+                clean = line.strip().lstrip("*").lstrip("#").strip()
+                upper = clean.upper()
+
+                if upper.startswith("АНАЛИЗ:") or upper.startswith("АНАЛИЗ :"):
+                    val = clean.split(":", 1)[1].strip() if ":" in clean else ""
+                    if val:
+                        result["analysis"] = val
+                elif upper.startswith("РЕКОМЕНДАЦИЯ:") or upper.startswith("РЕКОМЕНДАЦИЯ :"):
+                    val = clean.split(":", 1)[1].strip().lower() if ":" in clean else ""
+                    if val:
+                        result["recommendation"] = val
+                elif upper.startswith("ЗОНЫ:") or upper.startswith("ЗОНЫ :"):
+                    val = clean.split(":", 1)[1].strip() if ":" in clean else ""
+                    if val:
+                        result["zones"] = val
+
+            # Fallback: ищем ключевые слова если парсер не нашёл
+            if not result.get("recommendation"):
+                text_lower = text.lower()
+                if "покупать" in text_lower:
+                    result["recommendation"] = "покупать"
+                elif "продавать" in text_lower:
+                    result["recommendation"] = "продавать"
+                elif "выжидать" in text_lower:
+                    result["recommendation"] = "выжидать"
+
             return result
     except Exception as e:
         print(f"  ❌ LLM: {e}")
