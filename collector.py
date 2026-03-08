@@ -349,7 +349,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
                 "https://api.anthropic.com/v1/messages",
                 headers={
                     "x-api-key": ANTHROPIC_KEY,
-                    "anthropic-version": "2023-06-01",
+                    "anthropic-version": "2024-10-22",
                     "content-type": "application/json",
                 },
                 json={
@@ -358,7 +358,10 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
                     "messages": [{"role": "user", "content": prompt}],
                 }
             )
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                body = resp.text
+                log.warning(f"LLM API {symbol} status={resp.status_code}: {body[:500]}")
+                return {}
             data = resp.json()
             text = data["content"][0]["text"].strip()
 
