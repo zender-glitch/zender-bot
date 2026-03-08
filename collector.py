@@ -300,7 +300,7 @@ async def fetch_fear_greed() -> dict:
 # Формат: https://charts.bgeometrics.com/data/{metric}.json
 
 BLOCKCHAIN_INFO_BASE = "https://api.blockchain.info/charts"
-BGEOMETRICS_BASE = "https://charts.bgeometrics.com/data"
+BGEOMETRICS_BASE = "https://bitcoin-data.com/v1"  # BGeometrics API v1 (бесплатно, 8 req/hour)
 
 
 async def blockchain_chart_get(metric: str) -> list | None:
@@ -320,9 +320,15 @@ async def blockchain_chart_get(metric: str) -> list | None:
         return None
 
 
-async def bgeometrics_get(metric: str) -> list | None:
-    """Запрос к BGeometrics API. Возвращает data или None."""
-    url = f"{BGEOMETRICS_BASE}/{metric}.json"
+async def bgeometrics_get(metric: str, last: bool = False) -> dict | list | None:
+    """
+    Запрос к BGeometrics API v1 (bitcoin-data.com).
+    metric: 'sopr', 'exchange-reserves', etc.
+    last=True → получить только последнее значение (/metric/{last})
+    Формат ответа: {"d": "2026-03-08", "unixTs": 1741..., "sopr": 1.02, ...}
+    """
+    suffix = f"/{metric}/last" if last else f"/{metric}"
+    url = f"{BGEOMETRICS_BASE}{suffix}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(url)
@@ -330,12 +336,7 @@ async def bgeometrics_get(metric: str) -> list | None:
                 log.warning(f"BGeometrics {resp.status_code} {metric}")
                 return None
             data = resp.json()
-            # BGeometrics может возвращать list или dict с values
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict) and "values" in data:
-                return data["values"]
-            return None
+            return data
     except Exception as e:
         log.error(f"BGeometrics {metric}: {e}")
         return None
@@ -413,10 +414,61 @@ async def fetch_onchain_data(symbol: str) -> dict:
     if val:
         result["tx_count"] = int(val)
 
-    # TODO: BGeometrics SOPR + Exchange Balance — URL-ы возвращают 404
-    # Нужно найти правильные эндпоинты. Пока отключено.
-    # sopr_data = await bgeometrics_get("sopr")
-    # exch_data = await bgeometrics_get("balance_exchanges")
+    # Exchange Balance — берём из Coinglass (уже платим STARTUP $95/мес)
+    try:
+        exch_data = await cg_get("/api/exchange/balance/list", {"symbol": "BTC"})
+        if exch_data and isinstance(exch_data, list):
+            # Ищем агрегат "All" или суммируем по биржам
+            total_balance = 0.0
+            for item in exch_data:
+                try:
+                    bal = float(item.get("balance") or item.get("total") or 0)
+                    total_balance += bal
+                except (ValueError, TypeError):
+                    pass
+            if total_balance > 0:
+                result["exchange_balance"] = total_balance
+                # Считаем изменение если есть поле change
+                for item in exch_data:
+                    change_pct = item.get("change_percent_1d") or item.get("balance_change_percent_1d")
+                    if change_pct is not None:
+                        try:
+                            result["exchange_balance_change"] = float(change_pct)
+                        except (ValueError, TypeError):
+                            pass
+                        break
+                log.info(f"  🏦 Exchange Balance BTC: {total_balance:,.0f} BTC")
+        elif exch_data and isinstance(exch_data, dict):
+            # Может вернуть dict с общими данными
+            bal = exch_data.get("balance") or exch_data.get("total")
+            if bal:
+                result["exchange_balance"] = float(bal)
+                change_pct = exch_data.get("change_percent_1d") or exch_data.get("balance_change_percent_1d")
+                if change_pct is not None:
+                    result["exchange_balance_change"] = float(change_pct)
+                log.info(f"  🏦 Exchange Balance BTC: {float(bal):,.0f} BTC")
+    except Exception as e:
+        log.warning(f"Exchange Balance error: {e}")
+
+    # SOPR — BGeometrics API v1 (bitcoin-data.com/v1/sopr)
+    # Бесплатно, без ключа, лимит 8 req/hour
+    try:
+        sopr_data = await bgeometrics_get("sopr", last=True)
+        if sopr_data and isinstance(sopr_data, dict):
+            # Ответ: {"d": "2026-03-08", "unixTs": ..., "sopr": 1.02}
+            sopr_val = sopr_data.get("sopr")
+            if sopr_val is not None:
+                result["sopr"] = float(sopr_val)
+                log.info(f"  📊 SOPR BTC: {sopr_val}")
+        elif sopr_data and isinstance(sopr_data, list) and len(sopr_data) > 0:
+            # Если вернул массив — берём последний элемент
+            last_item = sopr_data[-1]
+            sopr_val = last_item.get("sopr") if isinstance(last_item, dict) else None
+            if sopr_val is not None:
+                result["sopr"] = float(sopr_val)
+                log.info(f"  📊 SOPR BTC: {sopr_val}")
+    except Exception as e:
+        log.warning(f"SOPR error: {e}")
 
     if result:
         log.info(f"  🔗 On-chain BTC: {list(result.keys())}")
