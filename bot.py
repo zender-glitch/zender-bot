@@ -1,6 +1,6 @@
 """
 ZENDER COMMANDER TERMINAL — Telegram Bot
-Этап 1 + 2: бот с командами, inline-кнопками + фоновый сборщик данных
+Этап 1-2: бот с командами, inline-кнопками + запуск коллектора данных.
 """
 
 import asyncio
@@ -51,7 +51,6 @@ def kb_main():
 def kb_coins(coins: list[str]):
     """Кнопки монет под сводкой"""
     buttons = [InlineKeyboardButton(text=c, callback_data=f"coin_{c}") for c in coins]
-    # По 3 кнопки в ряд
     rows = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -117,94 +116,123 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
 
 ⚡ t.me/ZenderCommander_bot"""
 
+
+def _arrow(change_str: str) -> str:
+    """Стрелка направления по строке процента: ↑ ↓ →"""
+    s = str(change_str).strip()
+    if s.startswith("+") and s != "+0.00%":
+        return "↑"
+    elif s.startswith("-") and s != "-0.00%":
+        return "↓"
+    return "→"
+
+
 def text_summary(user_coins: list[str], data: dict) -> str:
     """
-    Компактная сводка по монетам.
-    data — словарь {COIN: {price, change, signal, label}}
+    Компактная сводка по монетам — эталонный формат.
     """
-    lines = ["<b>ВАШИ МОНЕТЫ</b> · обновляется каждые 15 мин\n"]
-    lines.append("<code>")
+    lines = [
+        "<code>┌──────────────────────────────────┐",
+        "│    ZENDER COMMANDER TERMINAL     │",
+        "└──────────────────────────────────┘</code>",
+        "",
+        "<b>ВАШИ МОНЕТЫ</b> · обновление каждые 15 мин",
+        "",
+    ]
+
     for coin in user_coins:
         d = data.get(coin, {})
         price  = d.get("price",  "—")
         change = d.get("change", "—")
         signal = d.get("signal", "░░░░░")
-        label  = d.get("label",  "нет данных")
-        arrow  = "↑" if str(change).startswith("+") else ("↓" if str(change).startswith("-") else "→")
-        lines.append(f"{coin:<6} {str(price):>10}  {arrow} {change:<8}  {signal}  {label}")
-    lines.append("</code>")
-    lines.append("\n──────────────────────────────")
-    lines.append("⚡ Zender Commander Terminal")
+        label  = d.get("label",  "—")
+        arrow  = _arrow(change)
+
+        lines.append(f"<code>{coin:<5} {str(price):>10}  {arrow} {change:<9} {signal} {label}</code>")
+
+    lines.append("")
+    lines.append("<code>──────────────────────────────────</code>")
+    lines.append("⚡ <b>Zender Commander Terminal</b>")
     lines.append("t.me/ZenderCommander_bot")
     return "\n".join(lines)
 
+
 def text_coin_analysis(coin: str, data: dict) -> str:
     """
-    Полный анализ одной монеты.
+    Полный анализ одной монеты — эталонный формат.
+    Показываем только секции с реальными данными (не "—").
+    Секции без данных (киты, биржевой поток) скрываются.
     """
     d = data.get(coin, {})
-    price  = d.get("price",       "загружается...")
-    change = d.get("change",      "—")
-    long_  = d.get("long_vol",    "—")
-    long_p = d.get("long_pct",    "—")
-    short_ = d.get("short_vol",   "—")
-    short_p= d.get("short_pct",   "—")
-    oi     = d.get("oi",          "—")
-    oi_chg = d.get("oi_change",   "—")
-    fr     = d.get("funding_rate","—")
-    liq_up = d.get("liq_up",      "—")
-    liq_dn = d.get("liq_dn",      "—")
-    exflow = d.get("exchange_flow","—")
-    w_buy1 = d.get("whale_buy1h", "—")
-    w_buy24= d.get("whale_buy24h","—")
-    w_sell = d.get("whale_sell24h","—")
-    fg     = d.get("fear_greed",  "—")
-    fg_lbl = d.get("fear_greed_label", "—")
-    signal = d.get("signal",      "░░░░░")
-    sig_lbl= d.get("signal_label", d.get("label", "нет данных"))
-    llm    = d.get("llm_text",    "Анализ появится после подключения LLM (Этап 5).")
-    rec    = d.get("recommendation", "")
+    price   = d.get("price",       "—")
+    change  = d.get("change",      "—")
+    long_v  = d.get("long_vol",    "—")
+    long_p  = d.get("long_pct",    "—")
+    short_v = d.get("short_vol",   "—")
+    short_p = d.get("short_pct",   "—")
+    oi      = d.get("oi",          "—")
+    oi_chg  = d.get("oi_change",   "—")
+    fr      = d.get("funding_rate","—")
+    liq_up  = d.get("liq_up",      "—")
+    liq_dn  = d.get("liq_dn",      "—")
+    fg      = d.get("fear_greed",  "—")
+    fg_lbl  = d.get("fear_greed_label", "—")
+    signal  = d.get("signal",      "░░░░░")
+    sig_lbl = d.get("signal_label","—")
 
-    text = f"""<b>⚡ ZENDER COMMANDER TERMINAL</b>
+    arrow = _arrow(change)
 
-<code>{coin} / USDT        {price}   {change}
+    lines = [
+        "<code>┌──────────────────────────────────┐",
+        "│    ZENDER COMMANDER TERMINAL     │",
+        "└──────────────────────────────────┘</code>",
+        "",
+        f"<code>{coin} / USDT          {price}   {arrow} {change}</code>",
+    ]
 
-ПОЗИЦИИ
-ставят на рост     {long_:<12} {long_p}
-ставят на падение  {short_:<12} {short_p}
+    # ── ПОЗИЦИИ (buy/sell ratio) ──
+    if long_p != "—" or short_p != "—":
+        lines.append("")
+        lines.append("<b>ПОЗИЦИИ</b>")
+        lines.append(f"<code>ставят на рост     {long_v:<14}{long_p}</code>")
+        lines.append(f"<code>ставят на падение  {short_v:<14}{short_p}</code>")
 
-ОТКРЫТЫЙ ИНТЕРЕС
-{oi}   {oi_chg} за 4 часа
+    # ── ОТКРЫТЫЙ ИНТЕРЕС ──
+    if oi != "—":
+        lines.append("")
+        lines.append("<b>ОТКРЫТЫЙ ИНТЕРЕС</b>")
+        lines.append(f"<code>{oi}   {oi_chg} за 4 часа</code>")
 
-КОМИССИЯ ЗА УДЕРЖАНИЕ
-{fr}
+    # ── КОМИССИЯ ЗА УДЕРЖАНИЕ (Funding Rate) ──
+    if fr != "—":
+        lines.append("")
+        lines.append("<b>КОМИССИЯ ЗА УДЕРЖАНИЕ</b>")
+        lines.append(f"<code>{fr}</code>")
 
-ЗОНЫ ЛИКВИДАЦИЙ
-↑  позиций на падение  {liq_up}
-↓  позиций на рост     {liq_dn}
+    # ── ЛИКВИДАЦИИ ──
+    if liq_up != "—" or liq_dn != "—":
+        lines.append("")
+        lines.append("<b>ЛИКВИДАЦИИ (4ч)</b>")
+        lines.append(f"<code>↑  позиций на падение  {liq_up}</code>")
+        lines.append(f"<code>↓  позиций на рост     {liq_dn}</code>")
 
-МОНЕТЫ НА БИРЖАХ
-{exflow}
+    # ── НАСТРОЕНИЕ ──
+    if fg != "—":
+        lines.append("")
+        lines.append("<b>НАСТРОЕНИЕ</b>")
+        lines.append(f"<code>страх/жадность   {fg} — {fg_lbl}</code>")
 
-КИТЫ (кошельки от $1 млн)
-купили за последний час    {w_buy1}
-купили за последние 24ч    {w_buy24}
-продали за последние 24ч   {w_sell}
+    # ── СИГНАЛ ──
+    lines.append("")
+    lines.append("<code>──────────────────────────────────</code>")
+    lines.append(f"<code>СИГНАЛ   {signal}   {sig_lbl}</code>")
+    lines.append("<code>──────────────────────────────────</code>")
 
-НАСТРОЕНИЕ
-страх/жадность   {fg} — {fg_lbl}
+    lines.append("")
+    lines.append("⚡ <b>Zender Commander Terminal</b> · t.me/ZenderCommander_bot")
 
-──────────────────────────────────────
-СИГНАЛ   {signal}   {sig_lbl}</code>
+    return "\n".join(lines)
 
-{llm}"""
-
-    if rec:
-        text += f"\n\n<b>РЕКОМЕНДАЦИЯ:</b> {rec}"
-
-    text += "\n<code>──────────────────────────────────────</code>"
-    text += "\n⚡ Zender Commander Terminal · t.me/ZenderCommander_bot"
-    return text
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ХЕНДЛЕРЫ КОМАНД
@@ -214,7 +242,6 @@ def text_coin_analysis(coin: str, data: dict) -> str:
 async def cmd_start(message: Message):
     """Приветствие и регистрация пользователя"""
     user = message.from_user
-    # Сохраняем пользователя в Supabase
     await db.upsert_user(
         telegram_id=user.id,
         username=user.username or "",
@@ -387,7 +414,7 @@ async def cb_back_main(call: CallbackQuery):
 async def main():
     log.info("⚡ Zender Commander Terminal Bot — starting...")
 
-    # Запускаем фоновый сборщик данных (каждые 15 мин)
+    # Запускаем коллектор данных как фоновую задачу
     asyncio.create_task(collector_loop(interval_minutes=15))
 
     await dp.start_polling(bot)
