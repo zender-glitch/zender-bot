@@ -140,9 +140,7 @@ def text_summary(user_coins: list[str], data: dict) -> str:
     Компактная сводка по монетам — эталонный формат.
     """
     lines = [
-        "<code>┌──────────────────────────────────┐",
-        "│    ZENDER COMMANDER TERMINAL     │",
-        "└──────────────────────────────────┘</code>",
+        "⚡ <b>ZENDER COMMANDER TERMINAL</b>",
         "",
         "<b>ВАШИ МОНЕТЫ</b> · обновление каждые 15 мин",
         "",
@@ -156,10 +154,12 @@ def text_summary(user_coins: list[str], data: dict) -> str:
         label  = d.get("label",  "—")
         arrow  = _arrow(change)
 
-        lines.append(f"<code>{coin:<5} {str(price):>10}  {arrow} {change:<9} {signal} {label}</code>")
+        lines.append(f"{arrow} <code>{coin:<5} {str(price):>10}  {change:<9} {signal} {label}</code>")
 
     lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     lines.append("⚡ <b>Zender Commander Terminal</b>")
+    lines.append("t.me/ZenderCommander_bot")
     return "\n".join(lines)
 
 
@@ -199,11 +199,9 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     arrow = _arrow(change)
 
     lines = [
-        "<code>┌──────────────────────────────────┐",
-        "│    ZENDER COMMANDER TERMINAL     │",
-        "└──────────────────────────────────┘</code>",
+        "⚡ <b>ZENDER COMMANDER TERMINAL</b>",
         "",
-        f"<code>{coin} / USDT          {price}   {arrow} {change}</code>",
+        f"<b>{coin} / USDT</b>          <code>{price}</code>   {arrow} <code>{change}</code>",
     ]
 
     # ── ЛОНГ / ШОРТ (taker buy/sell ratio) ──
@@ -306,7 +304,9 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             lines.append(f"🔻 <code>Зона продажи:  {sell_zone}</code>")
 
     lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     lines.append("⚡ <b>Zender Commander Terminal</b>")
+    lines.append("t.me/ZenderCommander_bot")
 
     return "\n".join(lines)
 

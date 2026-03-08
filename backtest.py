@@ -1,14 +1,15 @@
 """
-ZENDER COMMANDER TERMINAL — Backtest LLM Recommendations
-Прогоняет LLM-анализ по историческим данным за 14 дней и сравнивает с реальностью.
+ZENDER COMMANDER TERMINAL — Backtest LLM Recommendations v2
+Прогоняет LLM-анализ по историческим данным за 14 дней.
+Обновлённый промпт (решительный, не "выжидать" по умолчанию).
+Работает даже без OI/FR history (использует доступные данные).
 """
 
 import asyncio
 import httpx
 import os
 import json
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ── Ключи ──
 COINGLASS_API_KEY = os.environ.get("COINGLASS_API_KEY", "")
@@ -17,14 +18,17 @@ ANTHROPIC_KEY = os.environ.get("ANTHROPIC_KEY", "")
 CG_BASE = "https://open-api-v4.coinglass.com"
 CG_HEADERS = {"CG-API-KEY": COINGLASS_API_KEY}
 
-SYMBOL = "BTC"  # Тестируем на BTC
+SYMBOL = "BTC"
 DAYS = 14
 
 
 def fmt_usd(val):
     if val is None:
         return "нет данных"
-    v = float(val)
+    try:
+        v = float(val)
+    except (ValueError, TypeError):
+        return "нет данных"
     if abs(v) >= 1_000_000_000:
         return f"${v/1_000_000_000:.2f} млрд"
     elif abs(v) >= 1_000_000:
@@ -40,12 +44,11 @@ def fmt_pct(val):
     try:
         v = float(val)
         return f"{'+' if v > 0 else ''}{v:.2f}%"
-    except:
+    except (ValueError, TypeError):
         return "нет данных"
 
 
 async def cg_get(path, params=None):
-    """Запрос к Coinglass API с логированием ответа при ошибке"""
     url = f"{CG_BASE}{path}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -84,62 +87,9 @@ async def fetch_price_history():
         return []
 
 
-async def fetch_oi_history():
-    """Исторический OI — нужен exchange + symbol=BTCUSDT (пара!)"""
-    print("📊 Загружаем OI history...")
-    PAIR = f"{SYMBOL}USDT"  # BTCUSDT, не BTC!
-    # Pair-based (exchange + pair)
-    for params in [
-        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
-        {"exchange": "Binance", "symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
-    ]:
-        data = await cg_get("/api/futures/openInterest/ohlc-history", params)
-        if data and isinstance(data, list):
-            print(f"  ✅ Получено {len(data)} записей OI (params: {params})")
-            return data
-    # Aggregated (coin-level, может не требовать exchange)
-    for params in [
-        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
-        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
-    ]:
-        data = await cg_get("/api/futures/openInterest/ohlc-aggregated-history", params)
-        if data and isinstance(data, list):
-            print(f"  ✅ Получено {len(data)} записей OI aggregated (params: {params})")
-            return data
-    print("  ⚠️ OI history недоступен")
-    return []
-
-
-async def fetch_fr_history():
-    """Исторический Funding Rate — нужен exchange + pair"""
-    print("💰 Загружаем FR history...")
-    PAIR = f"{SYMBOL}USDT"
-    for params in [
-        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
-        {"exchange": "Binance", "symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
-    ]:
-        data = await cg_get("/api/futures/fundingRate/ohlc-history", params)
-        if data and isinstance(data, list):
-            print(f"  ✅ Получено {len(data)} записей FR (params: {params})")
-            return data
-    # OI-weighted (aggregated, может принять просто symbol)
-    for params in [
-        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
-        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
-    ]:
-        data = await cg_get("/api/futures/fundingRate/oi-weight-ohlc-history", params)
-        if data and isinstance(data, list):
-            print(f"  ✅ Получено {len(data)} записей FR oi-weight (params: {params})")
-            return data
-    print("  ⚠️ FR history недоступен")
-    return []
-
-
 async def fetch_liquidation_history():
-    """Исторические ликвидации — aggregated нужен exchange_list, pair нужен exchange"""
+    """Исторические ликвидации"""
     print("💥 Загружаем ликвидации history...")
-    PAIR = f"{SYMBOL}USDT"
-    # Aggregated (coin-level) — требует exchange_list
     for exchange_list in ["Binance", "Binance,OKX,Bybit"]:
         data = await cg_get("/api/futures/liquidation/aggregated-history", {
             "symbol": SYMBOL,
@@ -148,52 +98,38 @@ async def fetch_liquidation_history():
             "exchange_list": exchange_list,
         })
         if data and isinstance(data, list):
-            print(f"  ✅ Получено {len(data)} записей ликвидаций (exchange_list={exchange_list})")
+            print(f"  ✅ Получено {len(data)} записей ликвидаций")
             return data
-    # Pair-level — требует exchange + pair
     data = await cg_get("/api/futures/liquidation/history", {
-        "exchange": "Binance",
-        "symbol": PAIR,
-        "interval": "1d",
-        "limit": DAYS + 1,
+        "exchange": "Binance", "symbol": f"{SYMBOL}USDT",
+        "interval": "1d", "limit": DAYS + 1,
     })
     if data and isinstance(data, list):
-        print(f"  ✅ Получено {len(data)} записей ликвидаций pair")
+        print(f"  ✅ Получено {len(data)} записей ликвидаций (pair)")
         return data
     print("  ⚠️ Liquidation history недоступен")
     return []
 
 
 async def fetch_ls_history():
-    """Исторический Long/Short ratio — kebab-case + exchange + pair"""
+    """Исторический Long/Short ratio"""
     print("📐 Загружаем L/S history...")
     PAIR = f"{SYMBOL}USDT"
-    # global L/S — пробуем с exchange и парой
     for params in [
         {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
         {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
     ]:
         data = await cg_get("/api/futures/global-long-short-account-ratio/history", params)
         if data and isinstance(data, list):
-            print(f"  ✅ Получено {len(data)} записей L/S global (params: {params})")
+            print(f"  ✅ Получено {len(data)} записей L/S")
             return data
-    # top trader L/S
-    for params in [
-        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
-        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
-    ]:
-        data = await cg_get("/api/futures/top-long-short-account-ratio/history", params)
-        if data and isinstance(data, list):
-            print(f"  ✅ Получено {len(data)} записей L/S top (params: {params})")
-            return data
-    # aggregated taker buy/sell
     for params in [
         {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
         {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
     ]:
         data = await cg_get("/api/futures/aggregated-taker-buy-sell-volume/history", params)
         if data and isinstance(data, list):
-            print(f"  ✅ Получено {len(data)} записей taker B/S (params: {params})")
+            print(f"  ✅ Получено {len(data)} записей taker B/S")
             return data
     print("  ⚠️ L/S history недоступен")
     return []
@@ -204,9 +140,7 @@ async def fetch_fear_greed_history():
     print("😱 Загружаем Fear & Greed history...")
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"https://api.alternative.me/fng/?limit={DAYS + 1}"
-            )
+            resp = await client.get(f"https://api.alternative.me/fng/?limit={DAYS + 1}")
             resp.raise_for_status()
             data = resp.json().get("data", [])
             print(f"  ✅ Получено {len(data)} дней F&G")
@@ -214,6 +148,23 @@ async def fetch_fear_greed_history():
     except Exception as e:
         print(f"  ❌ F&G: {e}")
         return []
+
+
+def find_by_date(history, target_date):
+    """Ищет запись в исторических данных по дате"""
+    if not history:
+        return None
+    for item in history:
+        ts = item.get("t") or item.get("time") or item.get("timestamp") or item.get("createTime")
+        if ts:
+            try:
+                ts_val = int(ts)
+                item_date = datetime.fromtimestamp(ts_val / 1000 if ts_val > 1e10 else ts_val).strftime("%Y-%m-%d")
+                if item_date == target_date:
+                    return item
+            except (ValueError, TypeError):
+                pass
+    return None
 
 
 async def call_llm(prompt: str) -> dict:
@@ -257,19 +208,15 @@ async def call_llm(prompt: str) -> dict:
 
 async def run_backtest():
     print("=" * 60)
-    print("🔬 ZENDER BACKTEST — LLM рекомендации за 14 дней")
+    print("🔬 ZENDER BACKTEST v2 — улучшенный промпт")
     print("=" * 60)
     print()
 
-    # 1. Собираем все исторические данные
     prices = await fetch_price_history()
     if len(prices) < 3:
         print("❌ Недостаточно ценовых данных!")
         return
 
-    oi_hist = await fetch_oi_history()
-    await asyncio.sleep(1)
-    fr_hist = await fetch_fr_history()
     await asyncio.sleep(1)
     liq_hist = await fetch_liquidation_history()
     await asyncio.sleep(1)
@@ -285,19 +232,22 @@ async def run_backtest():
 
     results = []
 
-    # Для каждого дня (кроме последнего — нужен для проверки)
     for i in range(len(prices) - 1):
         day = prices[i]
         next_day = prices[i + 1]
         date = day["date"]
         price = day["price"]
         next_price = next_day["price"]
-        change_24h = ((next_price - price) / price) * 100
+        change_pct = ((next_price - price) / price) * 100
 
-        # Подбираем данные за этот день
-        oi_val = None
-        oi_change = None
-        fr_val = None
+        # Изменение 24ч для текущего дня
+        if i > 0:
+            prev_price = prices[i - 1]["price"]
+            day_change = ((price - prev_price) / prev_price) * 100
+        else:
+            day_change = 0
+
+        # Подбираем данные
         liq_long = None
         liq_short = None
         long_pct = None
@@ -305,69 +255,56 @@ async def run_backtest():
         fg_val = None
         fg_label = None
 
-        # OI
-        if oi_hist:
-            for item in oi_hist:
-                ts = item.get("t") or item.get("time") or item.get("timestamp") or item.get("createTime")
-                if ts:
-                    item_date = datetime.fromtimestamp(ts / 1000 if ts > 1e10 else ts).strftime("%Y-%m-%d")
-                    if item_date == date:
-                        oi_val = item.get("c") or item.get("close") or item.get("openInterest") or item.get("open_interest")
-                        break
+        liq_item = find_by_date(liq_hist, date)
+        if liq_item:
+            liq_long = liq_item.get("longVolUsd") or liq_item.get("longLiquidationUsd") or liq_item.get("long_liquidation_usd")
+            liq_short = liq_item.get("shortVolUsd") or liq_item.get("shortLiquidationUsd") or liq_item.get("short_liquidation_usd")
 
-        # FR
-        if fr_hist:
-            for item in fr_hist:
-                ts = item.get("t") or item.get("time") or item.get("timestamp") or item.get("createTime")
-                if ts:
-                    item_date = datetime.fromtimestamp(ts / 1000 if ts > 1e10 else ts).strftime("%Y-%m-%d")
-                    if item_date == date:
-                        fr_val = item.get("c") or item.get("close") or item.get("fundingRate") or item.get("funding_rate")
-                        if fr_val:
-                            fr_val = float(fr_val) * 100
-                        break
+        ls_item = find_by_date(ls_hist, date)
+        if ls_item:
+            long_pct = ls_item.get("longRatio") or ls_item.get("longAccount") or ls_item.get("buyRatio") or ls_item.get("buy_ratio")
+            short_pct = ls_item.get("shortRatio") or ls_item.get("shortAccount") or ls_item.get("sellRatio") or ls_item.get("sell_ratio")
 
-        # Liquidations
-        if liq_hist:
-            for item in liq_hist:
-                ts = item.get("t") or item.get("time") or item.get("timestamp") or item.get("createTime")
-                if ts:
-                    item_date = datetime.fromtimestamp(ts / 1000 if ts > 1e10 else ts).strftime("%Y-%m-%d")
-                    if item_date == date:
-                        liq_long = item.get("longVolUsd") or item.get("long_volUsd") or item.get("longLiquidationUsd") or item.get("long_liquidation_usd")
-                        liq_short = item.get("shortVolUsd") or item.get("short_volUsd") or item.get("shortLiquidationUsd") or item.get("short_liquidation_usd")
-                        break
-
-        # L/S
-        if ls_hist:
-            for item in ls_hist:
-                ts = item.get("t") or item.get("time") or item.get("timestamp") or item.get("createTime")
-                if ts:
-                    item_date = datetime.fromtimestamp(ts / 1000 if ts > 1e10 else ts).strftime("%Y-%m-%d")
-                    if item_date == date:
-                        long_pct = item.get("longRatio") or item.get("long_ratio") or item.get("buyRatio") or item.get("buy_ratio") or item.get("longAccount")
-                        short_pct = item.get("shortRatio") or item.get("short_ratio") or item.get("sellRatio") or item.get("sell_ratio") or item.get("shortAccount")
-                        break
-
-        # Fear & Greed
         if fg_hist:
-            for item in fg_hist:
-                item_date = datetime.fromtimestamp(int(item.get("timestamp", 0))).strftime("%Y-%m-%d")
-                if item_date == date:
-                    fg_val = item.get("value")
-                    fg_label = item.get("value_classification")
-                    break
+            for fg_item in fg_hist:
+                try:
+                    fg_date = datetime.fromtimestamp(int(fg_item.get("timestamp", 0))).strftime("%Y-%m-%d")
+                    if fg_date == date:
+                        fg_val = fg_item.get("value")
+                        fg_label = fg_item.get("value_classification")
+                        break
+                except (ValueError, TypeError):
+                    pass
 
-        # Формируем промпт
-        prompt = f"""Ты — крипто-аналитик. Проанализируй данные {SYMBOL} и дай краткий анализ на русском языке.
+        prompt = f"""Ты — опытный крипто-аналитик. Проанализируй данные {SYMBOL} и дай РЕШИТЕЛЬНЫЙ анализ.
 
 ДАННЫЕ {SYMBOL} на {date}:
-- Цена: ${price:,.0f}
-- Открытый интерес: {fmt_usd(oi_val) if oi_val else 'нет данных'}
-- Funding Rate: {fmt_pct(fr_val) if fr_val else 'нет данных'}
-- Лонг/Шорт: {long_pct or '?'}% / {short_pct or '?'}%
-- Ликвидации: лонги {fmt_usd(liq_long)}, шорты {fmt_usd(liq_short)}
+- Цена: ${price:,.0f}, изменение 24ч: {fmt_pct(day_change)}
+- Открытый интерес (OI): нет данных
+- Funding Rate: нет данных
+- Покупатели/Продавцы (taker): {long_pct or '?'}% / {short_pct or '?'}%
+- Ликвидации {SYMBOL}: лонги {fmt_usd(liq_long)}, шорты {fmt_usd(liq_short)}
 - Fear & Greed: {fg_val or '?'} ({fg_label or '?'})
+
+ПРАВИЛА ОЦЕНКИ (следуй им строго):
+
+ПОКУПАТЬ если 2+ условий совпадают:
+- Покупатели > 52% (быки доминируют)
+- OI растёт > +0.5% за 1ч (новые деньги заходят)
+- Funding Rate отрицательный (шорты переплачивают — разворот вверх вероятен)
+- Fear & Greed < 30 (сильный страх — возможность покупки на панике)
+- Ликвидации шортов > ликвидаций лонгов в 2+ раза (шортов выдавливают)
+
+ПРОДАВАТЬ если 2+ условий совпадают:
+- Продавцы > 52% (медведи доминируют)
+- OI падает < -0.5% за 1ч (деньги уходят)
+- Funding Rate > +0.05% (лонги переплачивают — рынок перегрет)
+- Fear & Greed > 75 (сильная жадность — пора фиксировать прибыль)
+- Ликвидации лонгов > ликвидаций шортов в 2+ раза (лонги ликвидируют)
+
+ВЫЖИДАТЬ только если сигналы явно противоречат друг другу и нет перевеса ни в одну сторону.
+
+ВАЖНО: НЕ выбирай "выжидать" по умолчанию! Если есть 2+ совпадающих сигнала — давай направление.
 
 ОТВЕТЬ СТРОГО В ФОРМАТЕ (3 строки, без лишнего):
 АНАЛИЗ: [2-3 предложения простым языком]
@@ -379,23 +316,22 @@ async def run_backtest():
         rec = llm_result.get("recommendation", "—")
         analysis = llm_result.get("analysis", "—")
 
-        # Оценка: правильно ли
         correct = None
         if "покупать" in rec:
-            correct = change_24h > 0  # Цена должна вырасти
+            correct = change_pct > 0
         elif "продавать" in rec:
-            correct = change_24h < 0  # Цена должна упасть
+            correct = change_pct < 0
         elif "выжидать" in rec:
-            correct = abs(change_24h) < 2  # Цена не сильно изменилась (±2%)
+            correct = abs(change_pct) < 2
 
         icon = "✅" if correct else ("❌" if correct is False else "⏸️")
-        direction = f"{'🔺' if change_24h > 0 else '🔻'} {change_24h:+.2f}%"
+        direction = f"{'🔺' if change_pct > 0 else '🔻'} {change_pct:+.2f}%"
 
         results.append({
             "date": date,
             "price": price,
             "next_price": next_price,
-            "change": change_24h,
+            "change": change_pct,
             "recommendation": rec,
             "correct": correct,
             "analysis": analysis,
@@ -406,14 +342,18 @@ async def run_backtest():
         print(f"  {icon} {'Верно' if correct else ('Неверно' if correct is False else 'Нейтрально')}")
         print()
 
-        await asyncio.sleep(1)  # Не спамить API
+        await asyncio.sleep(1)
 
-    # Итоги
+    # ── Итоги ──
     print("=" * 60)
-    print("📊 ИТОГИ БЭКТЕСТА")
+    print("📊 ИТОГИ БЭКТЕСТА v2")
     print("=" * 60)
 
     total = len(results)
+    if total == 0:
+        print("Нет результатов!")
+        return
+
     correct_count = sum(1 for r in results if r["correct"] is True)
     wrong_count = sum(1 for r in results if r["correct"] is False)
     neutral_count = sum(1 for r in results if r["correct"] is None)
@@ -426,23 +366,33 @@ async def run_backtest():
     print(f"✅ Верных: {correct_count} ({correct_count/total*100:.0f}%)")
     print(f"❌ Неверных: {wrong_count} ({wrong_count/total*100:.0f}%)")
     print(f"⏸️  Нейтральных: {neutral_count}")
-    print(f"\nПокупать: {len(buy_recs)} раз")
-    print(f"Продавать: {len(sell_recs)} раз")
-    print(f"Выжидать: {len(wait_recs)} раз")
+    print(f"\n📈 Покупать: {len(buy_recs)} раз")
+    print(f"📉 Продавать: {len(sell_recs)} раз")
+    print(f"⏸️  Выжидать: {len(wait_recs)} раз")
 
     if buy_recs:
         avg_buy = sum(r["change"] for r in buy_recs) / len(buy_recs)
-        print(f"\nСреднее изменение после 'покупать': {avg_buy:+.2f}%")
+        correct_buy = sum(1 for r in buy_recs if r["correct"])
+        print(f"\n'Покупать' — среднее изменение: {avg_buy:+.2f}%, верных: {correct_buy}/{len(buy_recs)}")
     if sell_recs:
         avg_sell = sum(r["change"] for r in sell_recs) / len(sell_recs)
-        print(f"Среднее изменение после 'продавать': {avg_sell:+.2f}%")
+        correct_sell = sum(1 for r in sell_recs if r["correct"])
+        print(f"'Продавать' — среднее изменение: {avg_sell:+.2f}%, верных: {correct_sell}/{len(sell_recs)}")
     if wait_recs:
         avg_wait = sum(r["change"] for r in wait_recs) / len(wait_recs)
-        print(f"Среднее изменение после 'выжидать': {avg_wait:+.2f}%")
+        correct_wait = sum(1 for r in wait_recs if r["correct"])
+        print(f"'Выжидать' — среднее изменение: {avg_wait:+.2f}%, верных: {correct_wait}/{len(wait_recs)}")
 
-    # Сохраняем результаты
+    # PnL симуляция
+    pnl = 0.0
+    for r in results:
+        if "покупать" in r["recommendation"]:
+            pnl += r["change"]
+        elif "продавать" in r["recommendation"]:
+            pnl -= r["change"]
+    print(f"\n💰 Суммарный PnL (если следовать рекомендациям): {pnl:+.2f}%")
+
     print(f"\n{'='*60}")
-    print(json.dumps(results, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

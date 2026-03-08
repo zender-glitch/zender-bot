@@ -326,19 +326,39 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
         except (TypeError, ValueError):
             return "нет данных"
 
-    prompt = f"""Ты — крипто-аналитик. Проанализируй данные {symbol} и дай краткий анализ на русском языке.
+    prompt = f"""Ты — опытный крипто-аналитик. Проанализируй данные {symbol} и дай РЕШИТЕЛЬНЫЙ анализ.
 
-ДАННЫЕ {symbol}:
+ДАННЫЕ {symbol} ПРЯМО СЕЙЧАС:
 - Цена: ${price}, изменение 24ч: {safe_pct(change)}
-- Открытый интерес: {safe_usd(oi)} ({safe_pct(oi_change)} за 1ч)
+- Открытый интерес (OI): {safe_usd(oi)} ({safe_pct(oi_change)} за 1ч)
 - Funding Rate: {safe_pct(fr)}
-- Покупатели/Продавцы: {long_pct or '?'}% / {short_pct or '?'}%
+- Покупатели/Продавцы (taker): {long_pct or '?'}% / {short_pct or '?'}%
 - Ликвидации {symbol} (1ч): лонги {safe_usd(liq_long)}, шорты {safe_usd(liq_short)}
 - Ликвидации РЫНОК (1ч): лонги {safe_usd(mkt_liq_long)}, шорты {safe_usd(mkt_liq_short)}
 - Fear & Greed: {fg or '?'} ({fg_label or '?'})
 
+ПРАВИЛА ОЦЕНКИ (следуй им строго):
+
+ПОКУПАТЬ если 2+ условий совпадают:
+- Покупатели > 52% (быки доминируют)
+- OI растёт > +0.5% за 1ч (новые деньги заходят)
+- Funding Rate отрицательный (шорты переплачивают — разворот вверх вероятен)
+- Fear & Greed < 30 (сильный страх — возможность покупки на панике)
+- Ликвидации шортов > ликвидаций лонгов в 2+ раза (шортов выдавливают)
+
+ПРОДАВАТЬ если 2+ условий совпадают:
+- Продавцы > 52% (медведи доминируют)
+- OI падает < -0.5% за 1ч (деньги уходят)
+- Funding Rate > +0.05% (лонги переплачивают — рынок перегрет)
+- Fear & Greed > 75 (сильная жадность — пора фиксировать прибыль)
+- Ликвидации лонгов > ликвидаций шортов в 2+ раза (лонги ликвидируют)
+
+ВЫЖИДАТЬ только если сигналы явно противоречат друг другу и нет перевеса ни в одну сторону.
+
+ВАЖНО: НЕ выбирай "выжидать" по умолчанию! Если есть 2+ совпадающих сигнала в одну сторону — давай направление.
+
 ОТВЕТЬ СТРОГО В ФОРМАТЕ (3 строки, без лишнего):
-АНАЛИЗ: [2-3 предложения простым языком, без сленга, описывай что происходит на рынке]
+АНАЛИЗ: [2-3 предложения простым языком — что происходит и почему ты выбрал это направление]
 РЕКОМЕНДАЦИЯ: [одно слово: покупать / продавать / выжидать]
 ЗОНЫ: покупка $XXX,XXX–$XXX,XXX | продажа $XXX,XXX–$XXX,XXX"""
 
@@ -393,65 +413,88 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def calculate_signal(coin_data: dict) -> tuple[str, str]:
-    score = 0
-    max_score = 0
+    """
+    Расчёт силы сигнала на основе всех метрик.
+    Считаем бычьи и медвежьи сигналы отдельно.
+    Сила = количество совпадающих сигналов.
+    """
+    bull = 0  # бычьи сигналы
+    bear = 0  # медвежьи сигналы
 
+    # 1. Taker Buy/Sell
     long_pct = coin_data.get("long_pct")
     if long_pct is not None:
-        max_score += 1
-        if long_pct > 60:
-            score += 1
-        elif long_pct < 40:
-            score -= 0.5
+        if long_pct > 52:
+            bull += 1
+        elif long_pct < 48:
+            bear += 1
 
+    # 2. OI change
     oi_change = coin_data.get("oi_change_1h")
     if oi_change is not None:
-        max_score += 1
-        if oi_change > 2:
-            score += 1
-        elif oi_change < -2:
-            score -= 0.5
+        if oi_change > 0.5:
+            bull += 1  # новые деньги заходят
+        elif oi_change < -0.5:
+            bear += 1  # деньги уходят
 
+    # 3. Funding Rate
     fr = coin_data.get("funding_rate")
     if fr is not None:
-        max_score += 1
-        if 0 < fr < 0.05:
-            score += 1
-        elif fr > 0.1:
-            score -= 0.5
-        elif fr < -0.01:
-            score -= 0.5
+        if fr < -0.005:
+            bull += 1  # шорты переплачивают → разворот вверх
+        elif fr > 0.05:
+            bear += 1  # лонги переплачивают → перегрев
 
+    # 4. Fear & Greed
     fg = coin_data.get("fear_greed")
     if fg is not None:
-        max_score += 1
-        if fg > 60:
-            score += 1
-        elif fg < 30:
-            score -= 0.5
+        if fg < 30:
+            bull += 1  # сильный страх = возможность покупки
+        elif fg > 75:
+            bear += 1  # жадность = пора фиксировать
 
+    # 5. Цена 24ч
     change = coin_data.get("change_24h")
     if change is not None:
-        max_score += 1
-        if change > 2:
-            score += 1
-        elif change < -2:
-            score -= 0.5
+        if change > 3:
+            bull += 1
+        elif change < -3:
+            bear += 1
 
-    if max_score > 0:
-        normalized = max(0, min(5, int((score / max_score) * 5 + 2.5)))
-    else:
-        normalized = 0
+    # 6. Ликвидации
+    liq_long = coin_data.get("liq_long")
+    liq_short = coin_data.get("liq_short")
+    if liq_long and liq_short:
+        try:
+            ll = float(liq_long)
+            ls = float(liq_short)
+            if ls > ll * 2 and ls > 0:
+                bull += 1  # шортов ликвидируют → рост
+            elif ll > ls * 2 and ll > 0:
+                bear += 1  # лонгов ликвидируют → падение
+        except (ValueError, TypeError):
+            pass
 
-    bars = "▓" * normalized + "░" * (5 - normalized)
+    # Сила = максимум из бычьих/медвежьих
+    strength = max(bull, bear)
 
-    if normalized >= 4:
+    if strength >= 4:
+        normalized = 5
         label = "СИЛЬНЫЙ"
-    elif normalized >= 2:
+    elif strength >= 3:
+        normalized = 4
+        label = "СИЛЬНЫЙ"
+    elif strength >= 2:
+        normalized = 3
+        label = "СРЕДНИЙ"
+    elif strength >= 1:
+        normalized = 2
         label = "СРЕДНИЙ"
     else:
+        normalized = 1
         label = "СЛАБЫЙ"
 
+    bars = "▓" * normalized + "░" * (5 - normalized)
     return bars, label
 
 
