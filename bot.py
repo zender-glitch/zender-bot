@@ -118,13 +118,13 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
 
 
 def _arrow(change_str: str) -> str:
-    """Стрелка направления по строке процента: ↑ ↓ →"""
+    """Эмодзи-стрелка: 🟢 рост, 🔴 падение, ➡️ без изменений"""
     s = str(change_str).strip()
     if s.startswith("+") and s != "+0.00%":
-        return "↑"
+        return "🟢"
     elif s.startswith("-") and s != "-0.00%":
-        return "↓"
-    return "→"
+        return "🔴"
+    return "➡️"
 
 
 def _has(val) -> bool:
@@ -208,24 +208,39 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         f"<code>{coin} / USDT          {price}   {arrow} {change}</code>",
     ]
 
-    # ── ПОКУПКИ / ПРОДАЖИ (taker buy/sell ratio) ──
+    # ── ЛОНГ / ШОРТ (taker buy/sell ratio) ──
     if _has(long_p) or _has(short_p):
         lines.append("")
-        lines.append("<b>ПОКУПКИ / ПРОДАЖИ (4ч)</b>")
-        lines.append(f"<code>покупают            {long_p}</code>")
-        lines.append(f"<code>продают             {short_p}</code>")
+        lines.append("<b>ЛОНГ / ШОРТ (4ч)</b>")
+        lines.append(f"🟢 <code>лонг    {long_p}</code>")
+        lines.append(f"🔴 <code>шорт    {short_p}</code>")
 
     # ── ОТКРЫТЫЙ ИНТЕРЕС ──
     if _has(oi):
         lines.append("")
         lines.append("<b>ОТКРЫТЫЙ ИНТЕРЕС</b>")
-        lines.append(f"<code>{oi}   {oi_chg} за 1 час</code>")
+        oi_icon = _arrow(oi_chg)
+        lines.append(f"<code>{oi}</code>    {oi_icon} <code>{oi_chg} за 1ч</code>")
 
-    # ── КОМИССИЯ ЗА УДЕРЖАНИЕ (Funding Rate) ──
+    # ── FUNDING RATE ──
     if _has(fr):
         lines.append("")
-        lines.append("<b>КОМИССИЯ ЗА УДЕРЖАНИЕ</b>")
-        lines.append(f"<code>{fr}</code>")
+        lines.append("<b>FUNDING RATE</b>")
+        # Динамическая подсказка
+        try:
+            fr_val = float(fr.replace("%", "").replace("+", ""))
+            if fr_val > 0.01:
+                fr_hint = "лонги платят шортам (бычий перегрев)"
+            elif fr_val < -0.01:
+                fr_hint = "шорты платят лонгам (медвежий настрой)"
+            else:
+                fr_hint = "баланс"
+        except (ValueError, AttributeError):
+            fr_hint = ""
+        if fr_hint:
+            lines.append(f"<code>{fr}  → {fr_hint}</code>")
+        else:
+            lines.append(f"<code>{fr}</code>")
 
     # ── ЛИКВИДАЦИИ (монета + рынок) ──
     has_coin_liq = _has(liq_up) or _has(liq_dn)
@@ -235,18 +250,33 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         lines.append("<b>ЛИКВИДАЦИИ (1ч)</b>")
         if has_coin_liq:
             lines.append(f"<code>  {coin}:</code>")
-            lines.append(f"<code>  ↑ шорты (на падение)  {liq_up}</code>")
-            lines.append(f"<code>  ↓ лонги (на рост)     {liq_dn}</code>")
+            lines.append(f"<code>  ↑ шорты   {liq_up}</code>")
+            lines.append(f"<code>  ↓ лонги   {liq_dn}</code>")
         if has_mkt_liq:
-            lines.append(f"<code>  РЫНОК (все монеты):</code>")
-            lines.append(f"<code>  ↑ шорты (на падение)  {mkt_liq_short}</code>")
-            lines.append(f"<code>  ↓ лонги (на рост)     {mkt_liq_long}</code>")
+            lines.append(f"<code>  РЫНОК:</code>")
+            lines.append(f"<code>  ↑ шорты   {mkt_liq_short}</code>")
+            lines.append(f"<code>  ↓ лонги   {mkt_liq_long}</code>")
 
     # ── НАСТРОЕНИЕ ──
     if _has(fg):
         lines.append("")
         lines.append("<b>НАСТРОЕНИЕ</b>")
-        lines.append(f"<code>страх/жадность   {fg} — {fg_lbl}</code>")
+        # Эмодзи по уровню страха/жадности
+        try:
+            fg_val = int(fg)
+            if fg_val <= 25:
+                fg_icon = "😱"
+            elif fg_val <= 45:
+                fg_icon = "😟"
+            elif fg_val <= 55:
+                fg_icon = "😐"
+            elif fg_val <= 75:
+                fg_icon = "😏"
+            else:
+                fg_icon = "🤑"
+        except (ValueError, TypeError):
+            fg_icon = ""
+        lines.append(f"{fg_icon} <code>страх/жадность   {fg} — {fg_lbl}</code>")
 
     # ── СИГНАЛ ──
     lines.append("")
