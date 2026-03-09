@@ -848,10 +848,16 @@ async def fetch_kraken_futures(symbol: str) -> dict:
             tickers = data.get("tickers", [])
             for t in tickers:
                 if t.get("symbol") == ticker:
-                    # Funding Rate (уже в процентах, но может быть абсолютное значение)
-                    fr = t.get("fundingRate")
+                    # Funding Rate — Kraken использует fundingRatePrediction для perpetuals
+                    # fundingRate может быть annualized ставкой
+                    # Пробуем fundingRatePrediction сначала (это 8h rate)
+                    fr = t.get("fundingRatePrediction") or t.get("fundingRate")
                     if fr is not None:
-                        result["kraken_funding"] = float(fr) * 100  # в проценты
+                        fr_f = float(fr)
+                        # Если |значение| > 0.05 — скорее всего годовая ставка, конвертируем в 8h
+                        if abs(fr_f) > 0.05:
+                            fr_f = fr_f / 1095  # годовая → 8h rate
+                        result["kraken_funding"] = fr_f * 100  # в проценты
 
                     # Open Interest
                     oi = t.get("openInterest")
