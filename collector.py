@@ -33,8 +33,9 @@ KRAKEN_FUTURES_BASE = "https://futures.kraken.com/derivatives/api/v3"
 # dYdX v4 Indexer (бесплатно, без ключа, DEX — нет гео-блокировки)
 DYDX_BASE = "https://indexer.dydx.trade/v4"
 
-# CoinCap (бесплатно, без ключа — fallback для цен если CoinGecko 429)
-COINCAP_BASE = "https://api.coincap.io/v2"
+# CryptoCompare (бесплатно, без ключа — fallback для цен если CoinGecko 429)
+# CoinCap DNS не резолвится на Railway, заменён на CryptoCompare
+CRYPTOCOMPARE_BASE = "https://min-api.cryptocompare.com"
 
 # On-chain: бесплатные API (blockchain.info + BGeometrics + DeFiLlama), без ключа
 
@@ -343,55 +344,44 @@ async def fetch_prices() -> dict:
             log.warning(f"CoinGecko price error (attempt {attempt+1}): {e}")
             if attempt < 2:
                 await asyncio.sleep(5)
-    log.warning("  ⚠️ CoinGecko: все 3 попытки провалились, пробуем CoinCap fallback...")
-    return await fetch_prices_coincap()
+    log.warning("  ⚠️ CoinGecko: все 3 попытки провалились, пробуем CryptoCompare fallback...")
+    return await fetch_prices_cryptocompare()
 
 
-# CoinCap IDs (маппинг наших символов)
-COINCAP_IDS = {
-    "BTC": "bitcoin",
-    "ETH": "ethereum",
-    "SOL": "solana",
-    "BNB": "binance-coin",
-    "AVAX": "avalanche",
-}
-
-
-async def fetch_prices_coincap() -> dict:
+async def fetch_prices_cryptocompare() -> dict:
     """
-    Fallback для цен: CoinCap API v2 (бесплатно, без ключа).
+    Fallback для цен: CryptoCompare API (бесплатно, без ключа).
     Используется когда CoinGecko возвращает 429.
+    min-api.cryptocompare.com — стабильный DNS, работает на Railway.
     """
     result = {}
     try:
-        ids = ",".join(COINCAP_IDS.values())
+        fsyms = ",".join(COINS)  # BTC,ETH,SOL,BNB,AVAX
         async with httpx.AsyncClient(timeout=15) as client:
+            # Текущие цены
             resp = await client.get(
-                f"{COINCAP_BASE}/assets",
-                params={"ids": ids}
+                f"{CRYPTOCOMPARE_BASE}/data/pricemultifull",
+                params={"fsyms": fsyms, "tsyms": "USD"}
             )
             if resp.status_code != 200:
-                log.error(f"  ❌ CoinCap HTTP {resp.status_code}")
+                log.error(f"  ❌ CryptoCompare HTTP {resp.status_code}")
                 return {}
-            data = resp.json().get("data", [])
-            # Обратный маппинг coincap_id → symbol
-            reverse_map = {v: k for k, v in COINCAP_IDS.items()}
-            for asset in data:
-                asset_id = asset.get("id", "")
-                symbol = reverse_map.get(asset_id)
-                if symbol:
-                    price = asset.get("priceUsd")
-                    change = asset.get("changePercent24Hr")
+            raw = resp.json().get("RAW", {})
+            for symbol in COINS:
+                coin_raw = raw.get(symbol, {}).get("USD", {})
+                if coin_raw:
+                    price = coin_raw.get("PRICE")
+                    change_pct = coin_raw.get("CHANGEPCT24HOUR")
                     result[symbol] = {
-                        "price": float(price) if price else None,
-                        "change_24h": float(change) if change else None,
+                        "price": float(price) if price is not None else None,
+                        "change_24h": float(change_pct) if change_pct is not None else None,
                     }
             if result:
-                log.info(f"  ✅ CoinCap fallback: получены цены для {list(result.keys())}")
+                log.info(f"  ✅ CryptoCompare fallback: получены цены для {list(result.keys())}")
             else:
-                log.error("  ❌ CoinCap: пустой ответ")
+                log.error("  ❌ CryptoCompare: пустой ответ")
     except Exception as e:
-        log.error(f"  ❌ CoinCap error: {e}")
+        log.error(f"  ❌ CryptoCompare error: {e}")
     return result
 
 
@@ -1720,8 +1710,14 @@ async def collect_all():
     # DeFiLlama: стейблкоины + TVL (бесплатно)
     defillama_data = await fetch_defillama_data()
 
-    # Технические индикаторы для не-BTC монет (CoinGecko история, кэш 4ч)
-    # Загружаем заранее с паузами, чтобы не попасть в rate limit CoinGecko
+    # Общие данные (СНАЧАЛА цены — приоритет!)
+    fg_data = await fetch_fear_greed()
+    prices = await fetch_prices()
+
+    # Технические индикаторы для не-BTC монет (CoinGecko история, кэш 30мин)
+    # Загружаем ПОСЛЕ цен, с паузами, чтобы не сбить CoinGecko rate limit
+    # Пауза 8с между запросами + 10с после цен
+    await asyncio.sleep(10)  # Пауза после запроса цен
     for coin in COINS:
         if coin == "BTC":
             continue  # BTC получает из BGeometrics
@@ -1729,11 +1725,7 @@ async def collect_all():
         if cache_key in TECH_CACHE and (time.time() - TECH_CACHE[cache_key]["ts"]) < TECH_CACHE_TTL:
             continue  # Кэш актуален
         await fetch_tech_indicators(coin)
-        await asyncio.sleep(6)  # Пауза 6с между запросами CoinGecko (free tier: ~10 req/min)
-
-    # Общие данные
-    fg_data = await fetch_fear_greed()
-    prices = await fetch_prices()
+        await asyncio.sleep(8)  # Пауза 8с между запросами CoinGecko
 
     # Ликвидации — 1 запрос на все монеты
     liq_all = await cg_get("/api/futures/liquidation/coin-list")
