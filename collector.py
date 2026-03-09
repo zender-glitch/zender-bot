@@ -143,11 +143,81 @@ def calc_macd(prices: list[float]) -> tuple[float | None, float | None]:
     return round(macd_line[-1], 2), round(signal[-1], 2)
 
 
+async def _fetch_history_coingecko(symbol: str, client: httpx.AsyncClient) -> list[float] | None:
+    """Попытка получить 200 дней цен из CoinGecko. Одна попытка, без ретраев."""
+    gecko_id = COINGECKO_IDS.get(symbol)
+    if not gecko_id:
+        return None
+    try:
+        resp = await client.get(
+            f"https://api.coingecko.com/api/v3/coins/{gecko_id}/market_chart",
+            params={"vs_currency": "usd", "days": "200", "interval": "daily"}
+        )
+        if resp.status_code == 429:
+            log.warning(f"  ⚠️ CoinGecko 429 история {symbol} — переключаемся на CryptoCompare")
+            return None
+        if resp.status_code != 200:
+            log.warning(f"  ⚠️ CoinGecko history {symbol}: HTTP {resp.status_code}")
+            return None
+        data = resp.json()
+        price_points = data.get("prices", [])
+        if len(price_points) < 50:
+            log.warning(f"  ⚠️ CoinGecko history {symbol}: мало данных ({len(price_points)} точек)")
+            return None
+        return [p[1] for p in price_points]
+    except Exception as e:
+        log.warning(f"  ⚠️ CoinGecko history {symbol} error: {e}")
+        return None
+
+
+async def _fetch_history_cryptocompare(symbol: str, client: httpx.AsyncClient) -> list[float] | None:
+    """Fallback: 200 дней цен из CryptoCompare (бесплатно, без ключа, стабильный)."""
+    try:
+        resp = await client.get(
+            f"{CRYPTOCOMPARE_BASE}/data/v2/histoday",
+            params={"fsym": symbol, "tsym": "USD", "limit": 200}
+        )
+        if resp.status_code != 200:
+            log.warning(f"  ⚠️ CryptoCompare history {symbol}: HTTP {resp.status_code}")
+            return None
+        data = resp.json().get("Data", {}).get("Data", [])
+        if len(data) < 50:
+            log.warning(f"  ⚠️ CryptoCompare history {symbol}: мало данных ({len(data)} точек)")
+            return None
+        # close price из каждого дня
+        closes = [d["close"] for d in data if d.get("close") and d["close"] > 0]
+        if len(closes) < 50:
+            return None
+        log.info(f"  📊 CryptoCompare history {symbol}: {len(closes)} дней загружено")
+        return closes
+    except Exception as e:
+        log.warning(f"  ⚠️ CryptoCompare history {symbol} error: {e}")
+        return None
+
+
+def _calc_indicators_from_closes(closes: list[float]) -> dict:
+    """Считает RSI, MACD, SMA50, SMA200 из списка цен закрытия."""
+    result = {}
+    rsi = calc_rsi(closes)
+    if rsi is not None:
+        result["rsi"] = rsi
+    macd_val, macd_signal = calc_macd(closes)
+    if macd_val is not None:
+        result["macd"] = macd_val
+    sma50 = calc_sma(closes, 50)
+    if sma50 is not None:
+        result["sma50"] = sma50
+    sma200 = calc_sma(closes, 200)
+    if sma200 is not None:
+        result["sma200"] = sma200
+    return result
+
+
 async def fetch_tech_indicators(symbol: str) -> dict:
     """
-    Загружает 200 дней цен из CoinGecko и считает RSI, MACD, SMA50, SMA200.
-    Кэш 4 часа — дневные индикаторы не меняются часто.
-    Для BTC пропускаем — данные приходят из BGeometrics.
+    Загружает 200 дней цен и считает RSI, MACD, SMA50, SMA200.
+    Источники: CoinGecko (1 попытка) → CryptoCompare fallback.
+    Кэш 30 минут. Для BTC — данные из BGeometrics.
     """
     if symbol == "BTC":
         return {}  # BTC получает из BGeometrics
@@ -156,67 +226,33 @@ async def fetch_tech_indicators(symbol: str) -> dict:
     if cache_key in TECH_CACHE and (time.time() - TECH_CACHE[cache_key]["ts"]) < TECH_CACHE_TTL:
         return TECH_CACHE[cache_key]["data"]
 
-    gecko_id = COINGECKO_IDS.get(symbol)
-    if not gecko_id:
-        return {}
-
-    result = {}
+    closes = None
+    source = ""
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            # Retry до 3 раз при 429 (CoinGecko rate limit)
-            resp = None
-            for attempt in range(3):
-                resp = await client.get(
-                    f"https://api.coingecko.com/api/v3/coins/{gecko_id}/market_chart",
-                    params={"vs_currency": "usd", "days": "200", "interval": "daily"}
-                )
-                if resp.status_code == 429:
-                    wait = 8 * (attempt + 1)  # 8, 16, 24 сек
-                    log.warning(f"  ⚠️ CoinGecko 429 история {symbol} — ждём {wait}с (попытка {attempt+1}/3)")
-                    await asyncio.sleep(wait)
-                    continue
-                break
-            if resp is None or resp.status_code == 429:
-                log.warning(f"  ❌ CoinGecko история {symbol}: 429 после 3 попыток")
-                return {}
-            if resp.status_code != 200:
-                log.warning(f"  ⚠️ CoinGecko history {symbol}: HTTP {resp.status_code}")
-                return {}
-
-            data = resp.json()
-            price_points = data.get("prices", [])
-            if len(price_points) < 50:
-                log.warning(f"  ⚠️ Tech {symbol}: мало данных ({len(price_points)} точек)")
-                return {}
-
-            # Извлекаем только цены (без timestamp)
-            closes = [p[1] for p in price_points]
-
-            # Считаем индикаторы
-            rsi = calc_rsi(closes)
-            if rsi is not None:
-                result["rsi"] = rsi
-
-            macd_val, macd_signal = calc_macd(closes)
-            if macd_val is not None:
-                result["macd"] = macd_val
-
-            sma50 = calc_sma(closes, 50)
-            if sma50 is not None:
-                result["sma50"] = sma50
-
-            sma200 = calc_sma(closes, 200)
-            if sma200 is not None:
-                result["sma200"] = sma200
-
-            if result:
-                TECH_CACHE[cache_key] = {"data": result, "ts": time.time()}
-                log.info(f"  📊 Tech {symbol}: RSI={result.get('rsi','?')} | MACD={result.get('macd','?')} | SMA50={result.get('sma50','?')} | SMA200={result.get('sma200','?')}")
+            # Попытка 1: CoinGecko (одна попытка, без ретраев)
+            closes = await _fetch_history_coingecko(symbol, client)
+            if closes:
+                source = "CoinGecko"
             else:
-                log.warning(f"  ⚠️ Tech {symbol}: не удалось рассчитать индикаторы")
-
+                # Попытка 2: CryptoCompare fallback (без rate limit проблем)
+                closes = await _fetch_history_cryptocompare(symbol, client)
+                if closes:
+                    source = "CryptoCompare"
     except Exception as e:
         log.warning(f"Tech indicators {symbol} error: {e}")
+
+    if not closes:
+        log.warning(f"  ❌ Tech {symbol}: не удалось загрузить историю цен")
+        return {}
+
+    result = _calc_indicators_from_closes(closes)
+
+    if result:
+        TECH_CACHE[cache_key] = {"data": result, "ts": time.time()}
+        log.info(f"  📊 Tech {symbol} ({source}): RSI={result.get('rsi','?')} | MACD={result.get('macd','?')} | SMA50={result.get('sma50','?')} | SMA200={result.get('sma200','?')}")
+    else:
+        log.warning(f"  ⚠️ Tech {symbol}: не удалось рассчитать индикаторы")
 
     return result
 
@@ -1714,23 +1750,18 @@ async def collect_all():
     fg_data = await fetch_fear_greed()
     prices = await fetch_prices()
 
-    # Технические индикаторы для не-BTC монет (CoinGecko история, кэш 30мин)
-    # Загружаем ПОСЛЕ цен, с паузами, чтобы не сбить CoinGecko rate limit
-    # Preload максимум 2 монеты за цикл — остальные подхватятся при обработке монет
-    # (CoinGecko free tier даёт ~5-6 req/min, после 2 history запросов 3-й часто получает 429)
-    await asyncio.sleep(10)  # Пауза после запроса цен
-    preload_count = 0
+    # Технические индикаторы для не-BTC монет (кэш 30мин)
+    # CoinGecko (1 попытка) → CryptoCompare fallback (мгновенно)
+    # Загружаем ПОСЛЕ цен с паузами между CoinGecko запросами
+    await asyncio.sleep(8)  # Пауза после запроса цен
     for coin in COINS:
         if coin == "BTC":
             continue  # BTC получает из BGeometrics
-        if preload_count >= 2:
-            break  # Макс 2 preload запроса, остальные при обработке монеты
         cache_key = f"tech_{coin}"
         if cache_key in TECH_CACHE and (time.time() - TECH_CACHE[cache_key]["ts"]) < TECH_CACHE_TTL:
-            continue  # Кэш актуален — не считаем за preload
+            continue  # Кэш актуален
         await fetch_tech_indicators(coin)
-        preload_count += 1
-        await asyncio.sleep(10)  # Пауза 10с между запросами CoinGecko
+        await asyncio.sleep(6)  # Пауза между запросами
 
     # Ликвидации — 1 запрос на все монеты
     liq_all = await cg_get("/api/futures/liquidation/coin-list")
