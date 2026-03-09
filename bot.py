@@ -241,17 +241,20 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     change = d.get("change", "—")
     ch_icon = _change_icon(change)
 
-    # LLM данные (новый формат v8)
-    what_happening = d.get("what_happening", "") or d.get("llm_text", "")
-    trap           = d.get("trap", "")
-    recommendation = d.get("recommendation", "")
-    strength       = d.get("strength", "")
-    entry          = d.get("entry", "")
-    stop           = d.get("stop", "")
-    target         = d.get("target", "")
+    # LLM данные (новый формат v8) — убираем markdown-звёздочки **
+    def _clean(v):
+        return str(v).replace("**", "").replace("*", "").strip() if v else ""
+
+    what_happening = _clean(d.get("what_happening", "") or d.get("llm_text", ""))
+    trap           = _clean(d.get("trap", ""))
+    recommendation = _clean(d.get("recommendation", ""))
+    strength       = _clean(d.get("strength", ""))
+    entry          = _clean(d.get("entry", ""))
+    stop           = _clean(d.get("stop", ""))
+    target         = _clean(d.get("target", ""))
     # Fallback на старый формат
-    buy_zone       = d.get("buy_zone", "")
-    sell_zone      = d.get("sell_zone", "")
+    buy_zone       = _clean(d.get("buy_zone", ""))
+    sell_zone      = _clean(d.get("sell_zone", ""))
 
     rec_icon = _rec_icon(recommendation)
     rec_label = _rec_label(recommendation)
@@ -296,12 +299,12 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     oi_val = d.get("oi", "—")
     oi_chg = d.get("oi_change", "—")
     ob_ratio = d.get("bid_ask_ratio", "—")
-    long_p = d.get("long_pct", "—")
-    short_p = d.get("short_pct", "—")
+    long_p = str(d.get("long_pct", "—")).replace("%", "")
+    short_p = str(d.get("short_pct", "—")).replace("%", "")
     fg = d.get("fear_greed", "—")
     fg_lbl = d.get("fear_greed_label", "—")
-    bg_long_acc = d.get("bitget_long_acc", "—")
-    bg_short_acc = d.get("bitget_short_acc", "—")
+    bg_long_acc = str(d.get("bitget_long_acc", "—")).replace("%", "")
+    bg_short_acc = str(d.get("bitget_short_acc", "—")).replace("%", "")
 
     # Тренд
     if _has(sma50_val) and _has(sma200_val):
@@ -395,8 +398,6 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             pass
 
     # Толпа — показываем ТОЛЬКО при сильном перекосе (>65%)
-    bg_long_acc = d.get("bitget_long_acc", "—")
-    bg_short_acc = d.get("bitget_short_acc", "—")
     if _has(bg_long_acc):
         try:
             bg_l = float(bg_long_acc)
