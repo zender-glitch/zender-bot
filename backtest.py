@@ -1,5 +1,5 @@
 """
-ZENDER COMMANDER TERMINAL — Backtest v7 — Bybit OI/FR + Bounce Detection
+ZENDER TERMINAL — Backtest v7 — Bybit OI/FR + Bounce Detection
 Прогоняет LLM-анализ по историческим данным за 30 дней.
 Все 5 монет: BTC, ETH, SOL, BNB, AVAX.
 v7 улучшения:

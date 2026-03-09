@@ -1,5 +1,5 @@
 """
-ZENDER COMMANDER TERMINAL — Data Collector
+ZENDER TERMINAL — Data Collector
 Этап 2+5: сбор данных + LLM-анализ (Claude API)
 Запускается по расписанию, кладёт данные в Supabase.
 

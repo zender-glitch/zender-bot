@@ -1,5 +1,5 @@
 """
-ZENDER COMMANDER TERMINAL — Telegram Bot
+ZENDER TERMINAL — Telegram Bot
 Этап 1-2-5: бот с командами, inline-кнопками + коллектор + LLM-анализ.
 """
 
@@ -85,7 +85,7 @@ def kb_subscription():
 # ТЕКСТЫ СООБЩЕНИЙ
 # ══════════════════════════════════════════════════════════════════════════════
 
-WELCOME = """<b>⚡ ZENDER COMMANDER TERMINAL</b>
+WELCOME = """<b>⚡ ZENDER TERMINAL</b>
 
 Агрегатор крипто-данных с 30+ сервисов + LLM-анализ.
 Трейдер платит $14/мес вместо $200–800+ по отдельности.
@@ -98,7 +98,7 @@ WELCOME = """<b>⚡ ZENDER COMMANDER TERMINAL</b>
 
 Используй кнопки ниже 👇"""
 
-HELP_TEXT = """<b>⚡ ZENDER COMMANDER TERMINAL — Помощь</b>
+HELP_TEXT = """<b>⚡ ZENDER TERMINAL — Помощь</b>
 
 <b>Команды:</b>
 /start — главное меню
@@ -115,7 +115,7 @@ HELP_TEXT = """<b>⚡ ZENDER COMMANDER TERMINAL — Помощь</b>
 Coinglass · Glassnode · Hyblock · CryptoQuant
 Santiment · Deribit · Nansen · и ещё 20+ сервисов
 
-⚡ t.me/ZenderCommander_bot"""
+⚡ t.me/ZenderTerminal_bot"""
 
 
 def _arrow(change_str: str) -> str:
@@ -141,7 +141,7 @@ def text_summary(user_coins: list[str], data: dict) -> str:
     Компактная сводка по монетам — эталонный формат.
     """
     lines = [
-        "⚡ <b>ZENDER COMMANDER TERMINAL</b>",
+        "⚡ <b>ZENDER TERMINAL</b>",
         "",
         "<b>ВАШИ МОНЕТЫ</b> · обновление каждые 15 мин",
         "",
@@ -159,8 +159,8 @@ def text_summary(user_coins: list[str], data: dict) -> str:
 
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("⚡ <b>Zender Commander Terminal</b>")
-    lines.append("t.me/ZenderCommander_bot")
+    lines.append("⚡ <b>Zender Terminal</b>")
+    lines.append("t.me/ZenderTerminal_bot")
     return "\n".join(lines)
 
 
@@ -200,7 +200,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     arrow = _arrow(change)
 
     lines = [
-        "⚡ <b>ZENDER COMMANDER TERMINAL</b>",
+        "⚡ <b>ZENDER TERMINAL</b>",
         "",
         f"<b>{coin} / USDT</b>          <code>{price}</code>   {arrow} <code>{change}</code>",
     ]
@@ -475,8 +475,8 @@ def text_coin_analysis(coin: str, data: dict) -> str:
 
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("⚡ <b>Zender Commander Terminal</b>")
-    lines.append("t.me/ZenderCommander_bot")
+    lines.append("⚡ <b>Zender Terminal</b>")
+    lines.append("t.me/ZenderTerminal_bot")
 
     return "\n".join(lines)
 
@@ -659,7 +659,7 @@ async def cb_back_main(call: CallbackQuery):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def main():
-    log.info("⚡ Zender Commander Terminal Bot — starting...")
+    log.info("⚡ Zender Terminal Bot — starting...")
 
     # Запускаем коллектор данных как фоновую задачу
     asyncio.create_task(collector_loop(interval_minutes=15))

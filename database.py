@@ -1,5 +1,5 @@
 """
-ZENDER COMMANDER TERMINAL — Database
+ZENDER TERMINAL — Database
 Работа с Supabase: пользователи + рыночные данные.
 """
 
