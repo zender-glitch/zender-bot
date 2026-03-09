@@ -1,9 +1,11 @@
 """
-ZENDER COMMANDER TERMINAL — Backtest LLM Recommendations v6
+ZENDER COMMANDER TERMINAL — Backtest v7 — Bybit OI/FR + Bounce Detection
 Прогоняет LLM-анализ по историческим данным за 30 дней.
 Все 5 монет: BTC, ETH, SOL, BNB, AVAX.
-Промпт v5: Trend Priority + OI/FR + On-chain + Tech Indicators.
-BGeometrics для BTC, CryptoCompare для остальных монет.
+v7 улучшения:
+  - Bybit API для OI и FR истории (бесплатный, без ключа, US-friendly)
+  - Улучшенный промпт: bounce detection, price momentum, менее жёсткий sell bias
+  - 3d/7d momentum для детекции перепроданности и отскоков
 """
 
 import asyncio
@@ -20,6 +22,13 @@ CG_BASE = "https://open-api-v4.coinglass.com"
 CG_HEADERS = {"CG-API-KEY": COINGLASS_API_KEY}
 BGEOMETRICS_BASE = "https://bitcoin-data.com/v1"
 CRYPTOCOMPARE_BASE = "https://min-api.cryptocompare.com"
+BYBIT_BASE = "https://api.bybit.com"
+
+# Bybit символы для фьючерсов
+BYBIT_SYMBOLS = {
+    "BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT",
+    "BNB": "BNBUSDT", "AVAX": "AVAXUSDT",
+}
 
 # Монеты для бэктеста
 ALL_COINS = ["BTC", "ETH", "SOL", "BNB", "AVAX"]
@@ -194,11 +203,97 @@ async def fetch_price_history_cryptocompare(symbol: str, days: int) -> list[dict
         return []
 
 
-async def fetch_coinglass_history(symbol: str, days: int) -> dict:
-    """Загружает OI, FR, L/S, ликвидации из Coinglass для конкретной монеты."""
-    result = {"oi": [], "fr": [], "ls": [], "liq": []}
+async def fetch_bybit_oi_history(symbol: str, days: int) -> list:
+    """Bybit Open Interest history — бесплатный, без ключа, US-friendly."""
+    bybit_sym = BYBIT_SYMBOLS.get(symbol, f"{symbol}USDT")
+    result = []
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Bybit даёт OI за intervalTime, максимум 200 записей
+            resp = await client.get(
+                f"{BYBIT_BASE}/v5/market/open-interest",
+                params={
+                    "category": "linear",
+                    "symbol": bybit_sym,
+                    "intervalTime": "1D",
+                    "limit": min(days + 5, 200),
+                }
+            )
+            if resp.status_code != 200:
+                print(f"  ⚠️ Bybit OI {symbol}: HTTP {resp.status_code}")
+                return []
+            body = resp.json()
+            if body.get("retCode") != 0:
+                print(f"  ⚠️ Bybit OI {symbol}: {body.get('retMsg')}")
+                return []
+            data = body.get("result", {}).get("list", [])
+            for item in data:
+                ts = int(item.get("timestamp", 0))
+                oi = item.get("openInterest")
+                if ts and oi:
+                    result.append({
+                        "t": ts,
+                        "openInterest": float(oi),
+                    })
+            result.sort(key=lambda x: x["t"])
+            print(f"  ✅ Bybit OI {symbol}: {len(result)} дней")
+    except Exception as e:
+        print(f"  ❌ Bybit OI {symbol}: {e}")
+    return result
 
-    # OI history
+
+async def fetch_bybit_fr_history(symbol: str, days: int) -> list:
+    """Bybit Funding Rate history — бесплатный, без ключа, US-friendly."""
+    bybit_sym = BYBIT_SYMBOLS.get(symbol, f"{symbol}USDT")
+    result = []
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Bybit даёт FR за каждые 8 часов, берём побольше
+            resp = await client.get(
+                f"{BYBIT_BASE}/v5/market/funding/history",
+                params={
+                    "category": "linear",
+                    "symbol": bybit_sym,
+                    "limit": min(days * 3 + 10, 200),  # 3 раза в день × дни
+                }
+            )
+            if resp.status_code != 200:
+                print(f"  ⚠️ Bybit FR {symbol}: HTTP {resp.status_code}")
+                return []
+            body = resp.json()
+            if body.get("retCode") != 0:
+                print(f"  ⚠️ Bybit FR {symbol}: {body.get('retMsg')}")
+                return []
+            data = body.get("result", {}).get("list", [])
+            # Группируем по дате — средний FR за день
+            daily_fr = {}
+            for item in data:
+                ts = int(item.get("fundingRateTimestamp", 0))
+                fr = item.get("fundingRate")
+                if ts and fr:
+                    date = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d")
+                    daily_fr.setdefault(date, []).append(float(fr))
+
+            for date, rates in sorted(daily_fr.items()):
+                avg_rate = sum(rates) / len(rates)
+                # Конвертируем дату в timestamp
+                dt = datetime.strptime(date, "%Y-%m-%d")
+                result.append({
+                    "t": int(dt.timestamp()) * 1000,
+                    "date": date,
+                    "fundingRate": avg_rate,
+                })
+            print(f"  ✅ Bybit FR {symbol}: {len(result)} дней")
+    except Exception as e:
+        print(f"  ❌ Bybit FR {symbol}: {e}")
+    return result
+
+
+async def fetch_coinglass_history(symbol: str, days: int) -> dict:
+    """Загружает OI, FR, L/S, ликвидации. Coinglass + Bybit fallback для OI/FR."""
+    result = {"oi": [], "fr": [], "ls": [], "liq": [], "bybit_oi": [], "bybit_fr": []}
+
+    # OI history — сначала Coinglass, потом Bybit fallback
     data = await cg_get("/api/futures/open-interest/ohlc-history", {
         "symbol": symbol, "interval": "1d", "limit": days + 1,
     })
@@ -206,7 +301,13 @@ async def fetch_coinglass_history(symbol: str, days: int) -> dict:
         result["oi"] = data
     await asyncio.sleep(0.5)
 
-    # FR history
+    # Если CG не дал OI → Bybit fallback
+    if not result["oi"]:
+        bybit_oi = await fetch_bybit_oi_history(symbol, days)
+        result["bybit_oi"] = bybit_oi
+        await asyncio.sleep(0.5)
+
+    # FR history — сначала Coinglass, потом Bybit fallback
     for params in [
         {"symbol": symbol, "interval": "1d", "limit": days + 1},
         {"exchange": "Binance", "symbol": f"{symbol}USDT", "interval": "1d", "limit": days + 1},
@@ -217,7 +318,13 @@ async def fetch_coinglass_history(symbol: str, days: int) -> dict:
             break
     await asyncio.sleep(0.5)
 
-    # L/S ratio history
+    # Если CG не дал FR → Bybit fallback
+    if not result["fr"]:
+        bybit_fr = await fetch_bybit_fr_history(symbol, days)
+        result["bybit_fr"] = bybit_fr
+        await asyncio.sleep(0.5)
+
+    # L/S ratio history (Coinglass — работает на Hobbyist)
     for params in [
         {"exchange": "Binance", "symbol": f"{symbol}USDT", "interval": "1d", "limit": days + 1},
         {"symbol": symbol, "interval": "1d", "limit": days + 1},
@@ -228,7 +335,7 @@ async def fetch_coinglass_history(symbol: str, days: int) -> dict:
             break
     await asyncio.sleep(0.5)
 
-    # Liquidation history
+    # Liquidation history (Coinglass — работает на Hobbyist)
     for exchange_list in ["Binance", "Binance,OKX,Bybit"]:
         data = await cg_get("/api/futures/liquidation/aggregated-history", {
             "symbol": symbol, "interval": "1d", "limit": days + 1,
@@ -364,7 +471,7 @@ async def call_llm(prompt: str) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_prompt(symbol: str, date: str, coin_data: dict) -> str:
-    """Строит промпт — идентичный production промпту из collector.py."""
+    """Строит промпт v7 — с momentum, bounce detection, без жёсткого sell bias."""
     price = coin_data.get("price")
     day_change = coin_data.get("day_change")
     oi_val = coin_data.get("oi")
@@ -388,6 +495,10 @@ def build_prompt(symbol: str, date: str, coin_data: dict) -> str:
     sma50 = coin_data.get("sma50")
     sma200 = coin_data.get("sma200")
 
+    # Momentum
+    momentum_3d = coin_data.get("momentum_3d")
+    momentum_7d = coin_data.get("momentum_7d")
+
     onchain_lines = []
 
     # On-chain блок (BTC only)
@@ -406,7 +517,7 @@ def build_prompt(symbol: str, date: str, coin_data: dict) -> str:
     if any([rsi, macd, sma50, sma200]):
         onchain_lines.append(f"\nТЕХНИЧЕСКИЕ ИНДИКАТОРЫ:")
         if rsi is not None:
-            rsi_hint = "перекуплен (>70)" if rsi > 70 else "перепродан (<30)" if rsi < 30 else "нейтральная зона"
+            rsi_hint = "СИЛЬНО перепродан!" if rsi < 25 else "перепродан (<30)" if rsi < 30 else "перекуплен (>70)" if rsi > 70 else "нейтральная зона"
             onchain_lines.append(f"- RSI: {rsi:.1f} — {rsi_hint}")
         if macd is not None:
             macd_hint = "бычий импульс" if macd > 0 else "медвежий импульс"
@@ -417,9 +528,24 @@ def build_prompt(symbol: str, date: str, coin_data: dict) -> str:
             else:
                 onchain_lines.append(f"- SMA50/200: death cross (SMA50 ${sma50:,.0f} < SMA200 ${sma200:,.0f}) — медвежий")
 
+    # Momentum блок
+    if momentum_3d is not None or momentum_7d is not None:
+        onchain_lines.append(f"\nЦЕНОВОЙ МОМЕНТУМ:")
+        if momentum_3d is not None:
+            onchain_lines.append(f"- Изменение за 3 дня: {momentum_3d:+.2f}%")
+        if momentum_7d is not None:
+            onchain_lines.append(f"- Изменение за 7 дней: {momentum_7d:+.2f}%")
+        # Подсказки
+        if momentum_7d is not None and momentum_7d < -8:
+            onchain_lines.append(f"  ⚠️ СИЛЬНОЕ ПАДЕНИЕ за неделю — вероятность отскока высокая!")
+        elif momentum_3d is not None and momentum_3d < -5:
+            onchain_lines.append(f"  ⚠️ Резкое падение за 3 дня — возможен технический отскок")
+        elif momentum_7d is not None and momentum_7d > 8:
+            onchain_lines.append(f"  ⚠️ Сильный рост за неделю — возможна коррекция")
+
     onchain_block = "\n".join(onchain_lines) if onchain_lines else ""
 
-    return f"""Ты — опытный крипто-аналитик. Проанализируй данные {symbol} и дай РЕШИТЕЛЬНЫЙ анализ.
+    return f"""Ты — опытный крипто-аналитик. Проанализируй данные {symbol} и дай РЕШИТЕЛЬНЫЙ анализ на СЛЕДУЮЩИЕ 24 ЧАСА.
 
 ДАННЫЕ {symbol} на {date}:
 - Цена: ${price:,.0f}, изменение 24ч: {fmt_pct(day_change)}
@@ -434,44 +560,45 @@ def build_prompt(symbol: str, date: str, coin_data: dict) -> str:
 ПОКУПАТЬ если 2+ условий совпадают:
 - Покупатели > 52% (быки доминируют)
 - OI растёт > +0.5% за день (новые деньги заходят)
-- Funding Rate отрицательный (шорты переплачивают — разворот вверх вероятен)
-- Fear & Greed < 30 (сильный страх — возможность покупки на панике)
-- Ликвидации шортов > ликвидаций лонгов в 2+ раза (шортов выдавливают)
-- Нетто поток бирж отрицательный (BTC выводят — холдят — бычий)
-- SOPR < 1 (капитуляция — дно может быть близко)
+- Funding Rate отрицательный (шорты переплачивают — short squeeze вероятен)
+- Fear & Greed < 25 (экстремальный страх — контр-сигнал, рынок перепродан)
+- Ликвидации шортов > ликвидаций лонгов в 2+ раза
 - RSI < 30 (перепродан — разворот вверх вероятен)
-- MACD > 0 и растёт (бычий импульс)
+- Цена упала > 5% за 3 дня ИЛИ > 8% за 7 дней (перепроданность, отскок вероятен)
 
 ПРОДАВАТЬ если 2+ условий совпадают:
 - Продавцы > 52% (медведи доминируют)
 - OI падает < -0.5% за день (деньги уходят)
 - Funding Rate > +0.05% (лонги переплачивают — рынок перегрет)
-- Fear & Greed > 75 (сильная жадность — пора фиксировать прибыль)
-- Ликвидации лонгов > ликвидаций шортов в 2+ раза (лонги ликвидируют)
-- Нетто поток бирж положительный (BTC заводят на биржи — медвежий)
-- SOPR > 1.05 (массово фиксируют прибыль — возможна коррекция)
-- RSI > 70 (перекуплен — коррекция вероятна)
-- MACD < 0 и падает (медвежий импульс)
+- Fear & Greed > 75 (сильная жадность)
+- Ликвидации лонгов > ликвидаций шортов в 2+ раза
+- RSI > 70 (перекуплен)
+- Цена выросла > 5% за 3 дня ИЛИ > 10% за 7 дней (перегрев, коррекция вероятна)
 
-ПРИОРИТЕТ ТРЕНДА (САМОЕ ВАЖНОЕ ПРАВИЛО!):
-Технический тренд ВАЖНЕЕ сентимента. Страх и SOPR < 1 — это НЕ автоматический сигнал покупки!
-- Если MACD < 0 И death cross (SMA50 < SMA200) → тренд МЕДВЕЖИЙ. В медвежьем тренде:
-  → Страх (Fear & Greed < 30) = оправдан, это НЕ сигнал покупки
-  → SOPR < 1 = может падать ДАЛЬШЕ, капитуляция не значит дно
-  → Рекомендуй ПРОДАВАТЬ или ВЫЖИДАТЬ, НЕ покупать
-- Если MACD > 0 И golden cross (SMA50 > SMA200) → тренд БЫЧИЙ. В бычьем тренде:
-  → Страх = возможность покупки на откате
-  → SOPR < 1 = локальная коррекция, можно покупать
+ДЕТЕКЦИЯ ОТСКОКОВ (КРИТИЧЕСКИ ВАЖНО!):
+Даже в медвежьем тренде (death cross, MACD < 0) бывают ОТСКОКИ на 3-6%.
+Рекомендуй ПОКУПАТЬ на отскок если ВСЕ условия совпадают:
+- RSI < 30 (перепродан)
+- Цена упала > 5% за последние 3-7 дней
+- Fear & Greed < 30 (экстремальный страх)
+- Funding Rate отрицательный или нейтральный (шорты не перегреты)
+Это краткосрочная покупка на отскок, а не разворот тренда!
 
-ВЫЖИДАТЬ если сигналы явно противоречат друг другу и нет перевеса ни в одну сторону.
+ТРЕНД КАК КОНТЕКСТ (не абсолютное правило):
+- Death cross (SMA50 < SMA200) + MACD < 0 = медвежий тренд — общий BIAS на продажу
+- Но в медвежьем тренде случаются отскоки на 3-8% после сильных падений
+- Golden cross + MACD > 0 = бычий тренд — общий BIAS на покупку
+- Но в бычьем тренде случаются коррекции на 3-8% после сильных ростов
 
-ВАЖНО: НЕ выбирай "выжидать" по умолчанию! Если есть 2+ совпадающих сигнала — давай направление.
-Но НИКОГДА не рекомендуй "покупать" если MACD отрицательный И death cross — тренд важнее!
+ВЫЖИДАТЬ если:
+- Сигналы 50/50, нет перевеса
+- RSI в зоне 40-60, MACD около 0, нет экстремумов
+
+ВАЖНО: НЕ давай "продавать" 10 дней подряд! Если уже 3+ дня подряд падение — ищи отскок!
 
 ПРАВИЛА ДЛЯ ЗОН (СТРОГО!):
-- Зона покупки ДОЛЖНА ВКЛЮЧАТЬ текущую цену! Формат: от (цена - 1-2%) до (цена + 0.5%)
+- Зона покупки ДОЛЖНА ВКЛЮЧАТЬ текущую цену
 - Зона продажи = от (цена + 2-3%) до (цена + 4-5%)
-- НИКОГДА не давай зону покупки которая ПОЛНОСТЬЮ ниже текущей цены
 
 ОТВЕТЬ СТРОГО В ФОРМАТЕ (3 строки, без лишнего):
 АНАЛИЗ: [2-3 предложения простым языком]
@@ -502,7 +629,9 @@ async def run_backtest_coin(symbol: str, fg_hist: list, bg_hist: dict) -> list:
     # Coinglass исторические данные
     print(f"  📡 Coinglass: загрузка OI/FR/LS/LIQ...")
     cg_data = await fetch_coinglass_history(symbol, DAYS)
-    print(f"  ✅ OI:{len(cg_data['oi'])} FR:{len(cg_data['fr'])} LS:{len(cg_data['ls'])} LIQ:{len(cg_data['liq'])}")
+    oi_src = f"CG:{len(cg_data['oi'])}" if cg_data['oi'] else f"Bybit:{len(cg_data.get('bybit_oi', []))}"
+    fr_src = f"CG:{len(cg_data['fr'])}" if cg_data['fr'] else f"Bybit:{len(cg_data.get('bybit_fr', []))}"
+    print(f"  ✅ OI({oi_src}) FR({fr_src}) LS:{len(cg_data['ls'])} LIQ:{len(cg_data['liq'])}")
 
     await asyncio.sleep(2)
 
@@ -527,7 +656,7 @@ async def run_backtest_coin(symbol: str, fg_hist: list, bg_hist: dict) -> list:
             if prev_price > 0:
                 day_change = ((price - prev_price) / prev_price) * 100
 
-        # Coinglass данные по дате
+        # Coinglass данные по дате (с Bybit fallback для OI/FR)
         oi_val = None
         oi_change = None
         fr_val = None
@@ -536,6 +665,7 @@ async def run_backtest_coin(symbol: str, fg_hist: list, bg_hist: dict) -> list:
         liq_long = None
         liq_short = None
 
+        # OI — сначала Coinglass, потом Bybit
         oi_item = find_by_date(cg_data["oi"], date)
         if oi_item:
             oi_val = oi_item.get("c") or oi_item.get("close") or oi_item.get("openInterest")
@@ -550,6 +680,21 @@ async def run_backtest_coin(symbol: str, fg_hist: list, bg_hist: dict) -> list:
                         except (ValueError, TypeError, ZeroDivisionError):
                             pass
 
+        # Bybit OI fallback
+        if oi_val is None and cg_data.get("bybit_oi"):
+            bybit_oi_item = find_by_date(cg_data["bybit_oi"], date)
+            if bybit_oi_item:
+                oi_val = bybit_oi_item.get("openInterest")
+                if i > 0:
+                    prev_date = all_prices[i - 1]["date"]
+                    prev_bybit = find_by_date(cg_data["bybit_oi"], prev_date)
+                    if prev_bybit and prev_bybit.get("openInterest"):
+                        try:
+                            oi_change = ((float(oi_val) - float(prev_bybit["openInterest"])) / float(prev_bybit["openInterest"])) * 100
+                        except (ValueError, TypeError, ZeroDivisionError):
+                            pass
+
+        # FR — сначала Coinglass, потом Bybit
         fr_item = find_by_date(cg_data["fr"], date)
         if fr_item:
             fr_raw = fr_item.get("c") or fr_item.get("close") or fr_item.get("fundingRate")
@@ -558,6 +703,16 @@ async def run_backtest_coin(symbol: str, fg_hist: list, bg_hist: dict) -> list:
                     fr_val = float(fr_raw) * 100
                 except (ValueError, TypeError):
                     pass
+
+        # Bybit FR fallback
+        if fr_val is None and cg_data.get("bybit_fr"):
+            for bfr in cg_data["bybit_fr"]:
+                if bfr.get("date") == date:
+                    try:
+                        fr_val = float(bfr["fundingRate"]) * 100
+                    except (ValueError, TypeError):
+                        pass
+                    break
 
         ls_item = find_by_date(cg_data["ls"], date)
         if ls_item:
@@ -611,6 +766,14 @@ async def run_backtest_coin(symbol: str, fg_hist: list, bg_hist: dict) -> list:
             if bg_day.get("sma200") is not None:
                 sma200 = bg_day["sma200"]
 
+        # Price momentum — 3d и 7d изменение цены
+        momentum_3d = None
+        momentum_7d = None
+        if i >= 3:
+            momentum_3d = ((price - all_prices[i - 3]["price"]) / all_prices[i - 3]["price"]) * 100
+        if i >= 7:
+            momentum_7d = ((price - all_prices[i - 7]["price"]) / all_prices[i - 7]["price"]) * 100
+
         # Собираем данные для промпта
         coin_data = {
             "price": price, "day_change": day_change,
@@ -620,6 +783,7 @@ async def run_backtest_coin(symbol: str, fg_hist: list, bg_hist: dict) -> list:
             "fg_val": fg_val, "fg_label": fg_label,
             "sopr": sopr, "netflow": netflow, "reserve": reserve,
             "rsi": rsi, "macd": macd, "sma50": sma50, "sma200": sma200,
+            "momentum_3d": momentum_3d, "momentum_7d": momentum_7d,
         }
 
         prompt = build_prompt(symbol, date, coin_data)
@@ -636,6 +800,10 @@ async def run_backtest_coin(symbol: str, fg_hist: list, bg_hist: dict) -> list:
             extras.append(f"MACD:{macd:.0f}")
         if sopr:
             extras.append(f"SOPR:{sopr:.3f}")
+        if momentum_3d is not None:
+            extras.append(f"3d:{momentum_3d:+.1f}%")
+        if momentum_7d is not None:
+            extras.append(f"7d:{momentum_7d:+.1f}%")
         extra_str = f" | {' '.join(extras)}" if extras else ""
 
         print(f"  📅 {date} | ${price:,.0f}{extra_str}")
@@ -717,7 +885,7 @@ async def run_backtest():
             DAYS = int(arg)
 
     print("=" * 60)
-    print(f"🔬 ZENDER BACKTEST v6 — All Coins + Tech Indicators")
+    print(f"🔬 ZENDER BACKTEST v7 — Bybit OI/FR + Bounce Detection")
     print(f"   Монеты: {', '.join(coins)} | Дней: {DAYS}")
     print("=" * 60)
 
@@ -741,7 +909,7 @@ async def run_backtest():
 
     # ── ИТОГИ ──
     print("\n" + "=" * 60)
-    print("📊 ИТОГИ БЭКТЕСТА v6")
+    print("📊 ИТОГИ БЭКТЕСТА v7")
     print("=" * 60)
 
     total_all = 0
