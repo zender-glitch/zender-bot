@@ -39,6 +39,19 @@ CRYPTOCOMPARE_BASE = "https://min-api.cryptocompare.com"
 
 # On-chain: бесплатные API (blockchain.info + BGeometrics + DeFiLlama), без ключа
 
+# Etherscan (бесплатно, 5 calls/sec, 100k/day) — ETH on-chain
+try:
+    from config import ETHERSCAN_KEY
+    HAS_ETHERSCAN = bool(ETHERSCAN_KEY)
+except (ImportError, AttributeError):
+    ETHERSCAN_KEY = None
+    HAS_ETHERSCAN = False
+
+ETHERSCAN_BASE = "https://api.etherscan.io/api"
+
+# Blockchair (бесплатно, без ключа, 30 req/min) — крупные транзакции (киты)
+BLOCKCHAIR_BASE = "https://api.blockchair.com"
+
 from database import db
 
 log = logging.getLogger(__name__)
@@ -1309,6 +1322,142 @@ async def fetch_onchain_data(symbol: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ETHERSCAN — ETH Gas + Whale Wallets (бесплатно, 5 calls/sec)
+# ══════════════════════════════════════════════════════════════════════════════
+
+ETHERSCAN_CACHE = {}  # {key: {"data": ..., "ts": time.time()}}
+ETHERSCAN_CACHE_TTL = 15 * 60  # 15 минут
+
+async def fetch_etherscan_data() -> dict:
+    """
+    ETH on-chain данные из Etherscan:
+    - Gas Price (Gwei) — показывает загрузку сети
+    - ETH Supply — общее предложение
+    """
+    if not HAS_ETHERSCAN:
+        return {}
+
+    cache_key = "etherscan_main"
+    if cache_key in ETHERSCAN_CACHE and (time.time() - ETHERSCAN_CACHE[cache_key]["ts"]) < ETHERSCAN_CACHE_TTL:
+        return ETHERSCAN_CACHE[cache_key]["data"]
+
+    result = {}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            # Gas Price
+            resp = await client.get(ETHERSCAN_BASE, params={
+                "module": "gastracker",
+                "action": "gasoracle",
+                "apikey": ETHERSCAN_KEY,
+            })
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("status") == "1" and data.get("result"):
+                    r = data["result"]
+                    result["eth_gas_low"] = int(r.get("SafeGasPrice", 0))
+                    result["eth_gas_avg"] = int(r.get("ProposeGasPrice", 0))
+                    result["eth_gas_high"] = int(r.get("FastGasPrice", 0))
+                    log.info(f"  ⛽ ETH Gas: {result['eth_gas_low']}/{result['eth_gas_avg']}/{result['eth_gas_high']} Gwei")
+
+            await asyncio.sleep(0.3)  # Rate limit respect
+
+            # ETH Supply (total)
+            resp2 = await client.get(ETHERSCAN_BASE, params={
+                "module": "stats",
+                "action": "ethsupply",
+                "apikey": ETHERSCAN_KEY,
+            })
+            if resp2.status_code == 200:
+                data2 = resp2.json()
+                if data2.get("status") == "1" and data2.get("result"):
+                    # Result in Wei, convert to ETH
+                    supply_wei = int(data2["result"])
+                    supply_eth = supply_wei / 1e18
+                    result["eth_supply"] = supply_eth
+                    log.info(f"  📊 ETH Supply: {supply_eth:,.0f} ETH")
+
+    except Exception as e:
+        log.warning(f"Etherscan error: {e}")
+
+    if result:
+        ETHERSCAN_CACHE[cache_key] = {"data": result, "ts": time.time()}
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BLOCKCHAIR — Крупные транзакции (КИТЫ) (бесплатно, без ключа, 30 req/min)
+# ══════════════════════════════════════════════════════════════════════════════
+
+BLOCKCHAIR_CACHE = {}  # {key: {"data": ..., "ts": time.time()}}
+BLOCKCHAIR_CACHE_TTL = 15 * 60  # 15 минут
+
+# Маппинг наших монет → Blockchair chain names
+BLOCKCHAIR_CHAINS = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+}
+
+async def fetch_whale_data(symbol: str) -> dict:
+    """
+    Крупнейшие транзакции за 24ч через Blockchair.
+    Возвращает: кол-во крупных транзакций, самая большая транзакция в USD.
+    Только BTC и ETH (Blockchair бесплатно поддерживает эти 2 основные).
+    """
+    chain = BLOCKCHAIR_CHAINS.get(symbol)
+    if not chain:
+        return {}
+
+    cache_key = f"whale_{symbol}"
+    if cache_key in BLOCKCHAIR_CACHE and (time.time() - BLOCKCHAIR_CACHE[cache_key]["ts"]) < BLOCKCHAIR_CACHE_TTL:
+        return BLOCKCHAIR_CACHE[cache_key]["data"]
+
+    result = {}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Получаем статистику блокчейна (включает largest_transaction_24h)
+            resp = await client.get(f"{BLOCKCHAIR_BASE}/{chain}/stats")
+            if resp.status_code == 200:
+                data = resp.json()
+                stats = data.get("data", {})
+
+                # Крупнейшая транзакция за 24ч
+                largest_tx = stats.get("largest_transaction_24h")
+                if largest_tx:
+                    largest_hash = largest_tx.get("hash", "")
+                    largest_value = largest_tx.get("value_usd")
+                    if largest_value is not None:
+                        result["whale_largest_tx_usd"] = float(largest_value)
+                        log.info(f"  🐋 {symbol} крупнейшая TX 24ч: ${float(largest_value):,.0f}")
+
+                # Общий объём транзакций за 24ч
+                tx_24h = stats.get("transactions_24h")
+                if tx_24h is not None:
+                    result["whale_tx_count_24h"] = int(tx_24h)
+
+                # Средняя транзакция
+                avg_tx = stats.get("average_transaction_fee_usd_24h")
+                if avg_tx is not None:
+                    result["whale_avg_fee_usd"] = float(avg_tx)
+
+                # Mempool (только для BTC)
+                mempool = stats.get("mempool_transactions")
+                if mempool is not None:
+                    result["whale_mempool"] = int(mempool)
+
+                # Сложность
+                difficulty = stats.get("difficulty")
+                if difficulty is not None:
+                    result["whale_difficulty"] = float(difficulty)
+
+    except Exception as e:
+        log.warning(f"Blockchair {symbol} error: {e}")
+
+    if result:
+        BLOCKCHAIR_CACHE[cache_key] = {"data": result, "ts": time.time()}
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # LLM-АНАЛИЗ (Claude API)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1382,6 +1531,11 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     bid_depth = coin_data.get("bid_depth_usd")
     ask_depth = coin_data.get("ask_depth_usd")
     bid_ask_ratio = coin_data.get("bid_ask_ratio")
+    # Whale данные (Blockchair)
+    whale_largest_tx = coin_data.get("whale_largest_tx_usd")
+    whale_tx_count = coin_data.get("whale_tx_count_24h")
+    # ETH Gas (Etherscan)
+    eth_gas = coin_data.get("eth_gas_avg")
 
     # Блок on-chain + технических данных для промпта
     onchain_block = ""
@@ -1467,6 +1621,21 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
         else:
             ob_hint = "баланс покупателей/продавцов"
         onchain_lines.append(f"- Bid/Ask Ratio: {bid_ask_ratio:.1%} — {ob_hint}")
+
+    # Whale данные (Blockchair — крупные транзакции)
+    if whale_largest_tx or whale_tx_count:
+        onchain_lines.append(f"\nКИТЫ (крупные транзакции {symbol}):")
+        if whale_largest_tx:
+            onchain_lines.append(f"- Крупнейшая TX за 24ч: ${whale_largest_tx:,.0f}")
+        if whale_tx_count:
+            onchain_lines.append(f"- Всего транзакций 24ч: {whale_tx_count:,}")
+
+    # ETH Gas (Etherscan)
+    if eth_gas and symbol == "ETH":
+        onchain_lines.append(f"\nETH СЕТЬ:")
+        onchain_lines.append(f"- Gas Price: {eth_gas} Gwei")
+        gas_hint = "высокая нагрузка" if eth_gas > 50 else "умеренная нагрузка" if eth_gas > 20 else "низкая нагрузка"
+        onchain_lines.append(f"- Активность сети: {gas_hint}")
 
     if onchain_lines:
         onchain_block = "\n".join(onchain_lines)
@@ -1848,6 +2017,9 @@ async def collect_all():
     # DeFiLlama: стейблкоины + TVL (бесплатно)
     defillama_data = await fetch_defillama_data()
 
+    # Etherscan: ETH gas + supply (бесплатно, ключ нужен)
+    etherscan_data = await fetch_etherscan_data()
+
     # Общие данные (СНАЧАЛА цены — приоритет!)
     fg_data = await fetch_fear_greed()
     prices = await fetch_prices()
@@ -1938,6 +2110,9 @@ async def collect_all():
                 fetch_kraken_orderbook(symbol),
             )
 
+            # Blockchair: крупные транзакции — киты (BTC, ETH)
+            whale_data = await fetch_whale_data(symbol)
+
             # Объединяем все данные
             coin_data = {
                 **price_data,
@@ -1955,6 +2130,8 @@ async def collect_all():
                 **dydx_data,          # dYdX: funding + OI
                 **ob_data,            # Kraken Order Book: bid/ask imbalance
                 **tech_data,          # RSI, MACD, SMA50, SMA200 (для не-BTC монет)
+                **whale_data,         # Blockchair: крупные TX (киты)
+                **etherscan_data,     # Etherscan: ETH gas
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -2019,6 +2196,9 @@ async def collect_all():
                 "bitcoin_bubble": str(coin_data.get("bitcoin_bubble", "—")),
                 "fear_greed": str(coin_data.get("fear_greed", "—")),
                 "fear_greed_label": coin_data.get("fear_greed_label", "—"),
+                "whale_largest_tx_usd": fmt_usd(coin_data.get("whale_largest_tx_usd")) if coin_data.get("whale_largest_tx_usd") else "—",
+                "whale_tx_count_24h": str(coin_data.get("whale_tx_count_24h", "—")),
+                "eth_gas_avg": str(coin_data.get("eth_gas_avg", "—")),
                 "signal": signal_bar,
                 "label": signal_label,
                 "signal_label": signal_label,

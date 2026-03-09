@@ -409,6 +409,35 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         except (ValueError, TypeError):
             pass
 
+    # ── КИТЫ ──
+    whale_tx = d.get("whale_largest_tx_usd", "—")
+    eth_gas = d.get("eth_gas_avg", "—")
+    if _has(whale_tx):
+        lines.append("")
+        try:
+            wt = float(str(whale_tx).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9").replace("K", "e3"))
+            if wt > 1_000_000:
+                lines.append(f"🐋 Киты: крупнейшая TX ${wt/1e6:.1f}M")
+            elif wt > 1_000:
+                lines.append(f"🐋 Киты: крупнейшая TX ${wt/1e3:.0f}K")
+            else:
+                lines.append(f"🐋 Киты: крупнейшая TX ${wt:,.0f}")
+        except (ValueError, TypeError):
+            lines.append(f"🐋 Киты: крупнейшая TX {whale_tx}")
+    # ETH Gas (только для ETH)
+    if coin == "ETH" and _has(eth_gas):
+        try:
+            gas_v = int(float(str(eth_gas)))
+            if gas_v > 50:
+                gas_hint = "высокая нагрузка"
+            elif gas_v > 20:
+                gas_hint = "умеренная"
+            else:
+                gas_hint = "низкая"
+            lines.append(f"⛽ Gas: {gas_v} Gwei — {gas_hint}")
+        except (ValueError, TypeError):
+            pass
+
     # ── УРОВНИ ──
     lines.append("")
     lines.append("━━━ УРОВНИ ━━━")
