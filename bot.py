@@ -205,6 +205,60 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         f"<b>{coin} / USDT</b>          <code>{price}</code>   {arrow} <code>{change}</code>",
     ]
 
+    # ══════ БЛОК 1: САМОЕ ВАЖНОЕ СВЕРХУ ══════
+
+    # ── СИГНАЛ ──
+    lines.append("")
+    lines.append(f"⚡ <code>СИГНАЛ   {signal}   {sig_lbl}</code>")
+
+    # ── РЕКОМЕНДАЦИЯ + ЗОНЫ ──
+    if recommendation:
+        rec_clean = recommendation.replace("*", "").replace("_", "").strip()
+        rec_upper = rec_clean.upper()
+        if "ПОКУПАТЬ" in rec_upper:
+            rec_icon = "🟢"
+        elif "ПРОДАВАТЬ" in rec_upper:
+            rec_icon = "🔴"
+        else:
+            rec_icon = "🟡"
+        lines.append("")
+        lines.append(f"{rec_icon} <b>РЕКОМЕНДАЦИЯ:</b> {html_lib.escape(rec_clean)}")
+
+    if buy_zone or sell_zone:
+        lines.append("")
+        if buy_zone:
+            lines.append(f"🔺 <code>Зона покупки:  {html_lib.escape(buy_zone)}</code>")
+        if sell_zone:
+            lines.append(f"🔻 <code>Зона продажи:  {html_lib.escape(sell_zone)}</code>")
+
+    # ── AI-АНАЛИЗ ──
+    if llm_text:
+        lines.append("")
+        lines.append(f"🤖 <b>AI-АНАЛИЗ</b>")
+        lines.append(html_lib.escape(llm_text))
+
+    # ══════ БЛОК 2: ДАННЫЕ ══════
+
+    # ── НАСТРОЕНИЕ ──
+    if _has(fg):
+        lines.append("")
+        lines.append("<b>НАСТРОЕНИЕ</b>")
+        try:
+            fg_val = int(fg)
+            if fg_val <= 25:
+                fg_icon = "😱"
+            elif fg_val <= 45:
+                fg_icon = "😟"
+            elif fg_val <= 55:
+                fg_icon = "😐"
+            elif fg_val <= 75:
+                fg_icon = "😏"
+            else:
+                fg_icon = "🤑"
+        except (ValueError, TypeError):
+            fg_icon = ""
+        lines.append(f"{fg_icon} <code>страх/жадность   {fg} — {fg_lbl}</code>")
+
     # ── ЛОНГ / ШОРТ (taker buy/sell ratio) ──
     if _has(long_p) or _has(short_p):
         lines.append("")
@@ -223,7 +277,6 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     if _has(fr):
         lines.append("")
         lines.append("<b>FUNDING RATE</b>")
-        # Динамическая подсказка
         try:
             fr_val = float(fr.replace("%", "").replace("+", ""))
             if fr_val > 0.01:
@@ -254,45 +307,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             lines.append(f"<code>  ↑ шорты   {mkt_liq_short}</code>")
             lines.append(f"<code>  ↓ лонги   {mkt_liq_long}</code>")
 
-    # ── ON-CHAIN ──
-    active_addr = d.get("active_addresses", "—")
-    active_addr_chg = d.get("active_addresses_change", "—")
-    exchange_reserve = d.get("exchange_reserve_btc", "—")
-    exchange_netflow = d.get("exchange_netflow_btc", "—")
-    sopr_val = d.get("sopr", "—")
-
-    has_onchain = _has(active_addr) or _has(exchange_reserve) or _has(sopr_val) or _has(exchange_netflow)
-    if has_onchain:
-        lines.append("")
-        lines.append("<b>ON-CHAIN</b>")
-        if _has(active_addr):
-            addr_arrow = _arrow(active_addr_chg)
-            lines.append(f"<code>  👥 адреса    {active_addr} {addr_arrow} {active_addr_chg}</code>")
-        if _has(exchange_reserve):
-            lines.append(f"<code>  🏦 резерв    {exchange_reserve} BTC</code>")
-        if _has(exchange_netflow):
-            try:
-                nf = float(str(exchange_netflow).replace(",", "").replace("+", ""))
-                if nf < 0:
-                    nf_hint = "📤 отток (бычий)"
-                elif nf > 0:
-                    nf_hint = "📥 приток (медвежий)"
-                else:
-                    nf_hint = "баланс"
-            except (ValueError, TypeError):
-                nf_hint = ""
-            lines.append(f"<code>  🔄 поток     {exchange_netflow} BTC</code>")
-            if nf_hint:
-                lines.append(f"<code>              {nf_hint}</code>")
-        if _has(sopr_val):
-            try:
-                sv = float(sopr_val)
-                sopr_hint = "прибыль" if sv > 1 else "убыток" if sv < 1 else "безубыток"
-            except (ValueError, TypeError):
-                sopr_hint = ""
-            lines.append(f"<code>  📊 SOPR      {sopr_val} — {sopr_hint}</code>")
-
-    # ── ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ ──
+    # ── ТЕХН. ИНДИКАТОРЫ ──
     rsi_val = d.get("rsi", "—")
     macd_val = d.get("macd", "—")
     sma50_val = d.get("sma50", "—")
@@ -337,55 +352,100 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             if cross:
                 lines.append(f"<code>              {cross}</code>")
 
-    # ── НАСТРОЕНИЕ ──
-    if _has(fg):
-        lines.append("")
-        lines.append("<b>НАСТРОЕНИЕ</b>")
-        # Эмодзи по уровню страха/жадности
-        try:
-            fg_val = int(fg)
-            if fg_val <= 25:
-                fg_icon = "😱"
-            elif fg_val <= 45:
-                fg_icon = "😟"
-            elif fg_val <= 55:
-                fg_icon = "😐"
-            elif fg_val <= 75:
-                fg_icon = "😏"
-            else:
-                fg_icon = "🤑"
-        except (ValueError, TypeError):
-            fg_icon = ""
-        lines.append(f"{fg_icon} <code>страх/жадность   {fg} — {fg_lbl}</code>")
+    # ── ON-CHAIN ──
+    active_addr = d.get("active_addresses", "—")
+    active_addr_chg = d.get("active_addresses_change", "—")
+    exchange_reserve = d.get("exchange_reserve_btc", "—")
+    exchange_netflow = d.get("exchange_netflow_btc", "—")
+    sopr_val = d.get("sopr", "—")
 
-    # ── СИГНАЛ ──
-    lines.append("")
-    lines.append(f"⚡ <code>СИГНАЛ   {signal}   {sig_lbl}</code>")
-
-    # ── LLM-АНАЛИЗ ──
-    if llm_text:
+    has_onchain = _has(active_addr) or _has(exchange_reserve) or _has(sopr_val) or _has(exchange_netflow)
+    if has_onchain:
         lines.append("")
-        lines.append(f"🤖 <b>AI-АНАЛИЗ</b>")
-        lines.append(html_lib.escape(llm_text))
+        lines.append("<b>ON-CHAIN</b>")
+        if _has(active_addr):
+            addr_arrow = _arrow(active_addr_chg)
+            lines.append(f"<code>  👥 адреса    {active_addr} {addr_arrow} {active_addr_chg}</code>")
+        if _has(exchange_reserve):
+            lines.append(f"<code>  🏦 резерв    {exchange_reserve} BTC</code>")
+        if _has(exchange_netflow):
+            try:
+                nf = float(str(exchange_netflow).replace(",", "").replace("+", ""))
+                if nf < 0:
+                    nf_hint = "📤 отток (бычий)"
+                elif nf > 0:
+                    nf_hint = "📥 приток (медвежий)"
+                else:
+                    nf_hint = "баланс"
+            except (ValueError, TypeError):
+                nf_hint = ""
+            lines.append(f"<code>  🔄 поток     {exchange_netflow} BTC</code>")
+            if nf_hint:
+                lines.append(f"<code>              {nf_hint}</code>")
+        if _has(sopr_val):
+            try:
+                sv = float(sopr_val)
+                sopr_hint = "прибыль" if sv > 1 else "убыток" if sv < 1 else "безубыток"
+            except (ValueError, TypeError):
+                sopr_hint = ""
+            lines.append(f"<code>  📊 SOPR      {sopr_val} — {sopr_hint}</code>")
 
-    # ── РЕКОМЕНДАЦИЯ + ЗОНЫ ──
-    if recommendation:
-        rec_upper = recommendation.upper()
-        if "ПОКУПАТЬ" in rec_upper:
-            rec_icon = "🟢"
-        elif "ПРОДАВАТЬ" in rec_upper:
-            rec_icon = "🔴"
-        else:
-            rec_icon = "🟡"
-        lines.append("")
-        lines.append(f"{rec_icon} <b>РЕКОМЕНДАЦИЯ:</b> {html_lib.escape(recommendation)}")
+    # ── МАКРО ──
+    ahr999_val = d.get("ahr999", "—")
+    bull_peak = d.get("bull_peak_ratio", "—")
+    bubble_val = d.get("bitcoin_bubble", "—")
+    etf_val = d.get("etf_netflow", "—")
+    stablecoin_mcap_val = d.get("stablecoin_mcap", "—")
+    defi_tvl_val = d.get("defi_tvl", "—")
+    defi_tvl_chg = d.get("defi_tvl_change", "—")
 
-    if buy_zone or sell_zone:
+    has_macro = _has(ahr999_val) or _has(etf_val) or _has(stablecoin_mcap_val) or _has(defi_tvl_val) or _has(bull_peak)
+    if has_macro:
         lines.append("")
-        if buy_zone:
-            lines.append(f"🔺 <code>Зона покупки:  {html_lib.escape(buy_zone)}</code>")
-        if sell_zone:
-            lines.append(f"🔻 <code>Зона продажи:  {html_lib.escape(sell_zone)}</code>")
+        lines.append("<b>МАКРО</b>")
+        if _has(ahr999_val):
+            try:
+                av = float(ahr999_val)
+                if av < 0.45:
+                    ahr_hint = "зона покупки 🔥"
+                elif av > 1.2:
+                    ahr_hint = "переоценён ⚠️"
+                else:
+                    ahr_hint = "нормальная зона"
+            except (ValueError, TypeError):
+                ahr_hint = ""
+            lines.append(f"<code>  📊 AHR999    {ahr999_val} — {ahr_hint}</code>")
+        if _has(bull_peak):
+            lines.append(f"<code>  🔝 Bull Peak {bull_peak} индикаторов</code>")
+        if _has(etf_val):
+            try:
+                ev_str = str(etf_val).replace("$", "").replace(",", "").strip()
+                ev = float(ev_str)
+                etf_hint = "📥 приток" if ev > 0 else "📤 отток"
+            except (ValueError, TypeError):
+                etf_hint = ""
+            lines.append(f"<code>  💰 BTC ETF   {etf_val} {etf_hint}</code>")
+        if _has(stablecoin_mcap_val):
+            lines.append(f"<code>  💵 Стейблы   {stablecoin_mcap_val}</code>")
+        if _has(defi_tvl_val):
+            tvl_arrow = _arrow(defi_tvl_chg)
+            lines.append(f"<code>  🏦 DeFi TVL  {defi_tvl_val} {tvl_arrow} {defi_tvl_chg}</code>")
+
+    # ── КИТЫ (Whale Alert) ──
+    whale_count = d.get("whale_tx_count", "—")
+    whale_vol = d.get("whale_volume_usd", "—")
+    whale_to = d.get("whale_to_exchange", "—")
+    whale_from = d.get("whale_from_exchange", "—")
+
+    has_whales = _has(whale_count) and str(whale_count) != "0"
+    if has_whales:
+        lines.append("")
+        lines.append("<b>КИТЫ (1ч)</b>")
+        lines.append(f"<code>  🐋 транзакций {whale_count} | объём {whale_vol}</code>")
+        if _has(whale_to):
+            lines.append(f"<code>  📥 на биржи   {whale_to} (медвежий)</code>")
+        if _has(whale_from):
+            lines.append(f"<code>  📤 с бирж     {whale_from} (бычий)</code>")
 
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

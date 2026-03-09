@@ -23,7 +23,18 @@ except (ImportError, AttributeError):
     ANTHROPIC_KEY = None
     HAS_ANTHROPIC = False
 
-# On-chain: бесплатные API (blockchain.info + BGeometrics), без ключа
+# Whale Alert API (бесплатно, 10 req/min, без ключа для public endpoint)
+WHALE_ALERT_BASE = "https://api.whale-alert.io/v1"
+# Примечание: для бесплатного tier нужен API key (регистрация бесплатная)
+# Пока используем публичный endpoint без ключа, если будет 401 — добавим ключ
+try:
+    from config import WHALE_ALERT_KEY
+    HAS_WHALE_ALERT = bool(WHALE_ALERT_KEY)
+except (ImportError, AttributeError):
+    WHALE_ALERT_KEY = None
+    HAS_WHALE_ALERT = False
+
+# On-chain: бесплатные API (blockchain.info + BGeometrics + DeFiLlama), без ключа
 
 from database import db
 
@@ -436,6 +447,273 @@ def get_cached_bgeometrics(metric: str) -> dict | list | None:
     return None
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# COINGLASS INDICATORS (уже платим $95/мес STARTUP — используем больше endpoints!)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Кэш для Coinglass индикаторов (обновляются раз в день)
+CG_INDICATOR_CACHE = {}  # {name: {"data": ..., "ts": time.time()}}
+CG_INDICATOR_CACHE_TTL = 4 * 3600  # 4 часа — индикаторы медленно меняются
+
+
+async def fetch_cg_indicators():
+    """
+    Загружает индикаторы из Coinglass API с кэшированием.
+    Bull Market Peak, AHR999, Bitcoin Bubble Index, ETF flows.
+    Эти эндпоинты могут быть доступны на STARTUP ($95/мес).
+    """
+    endpoints = {
+        "bull_market_peak": "/api/indicator/bull-market-peak",
+        "ahr999": "/api/indicator/ahr999",
+        "bitcoin_bubble": "/api/indicator/bitcoin-bubble-index",
+        "btc_etf": "/api/bitcoin-etf/list",
+    }
+
+    for name, path in endpoints.items():
+        # Проверяем кэш
+        if name in CG_INDICATOR_CACHE:
+            cached = CG_INDICATOR_CACHE[name]
+            if (time.time() - cached["ts"]) < CG_INDICATOR_CACHE_TTL:
+                continue  # Кэш актуален
+
+        try:
+            data = await cg_get(path)
+            if data is not None:
+                CG_INDICATOR_CACHE[name] = {"data": data, "ts": time.time()}
+                log.info(f"  📊 CG Indicator {name}: OK")
+            else:
+                log.warning(f"  ⚠️ CG Indicator {name}: нет данных (возможно не доступен на STARTUP)")
+        except Exception as e:
+            log.error(f"  ❌ CG Indicator {name}: {e}")
+        await asyncio.sleep(1)  # Пауза между запросами
+
+
+def parse_cg_indicators() -> dict:
+    """Парсит кэшированные Coinglass индикаторы в удобный формат."""
+    result = {}
+
+    # Bull Market Peak — массив индикаторов
+    bmp = CG_INDICATOR_CACHE.get("bull_market_peak", {}).get("data")
+    if bmp and isinstance(bmp, list):
+        hit_count = 0
+        total = 0
+        for ind in bmp:
+            if isinstance(ind, dict):
+                total += 1
+                if ind.get("isHit"):
+                    hit_count += 1
+        if total > 0:
+            result["bull_peak_ratio"] = f"{hit_count}/{total}"
+            result["bull_peak_pct"] = round(hit_count / total * 100)
+            log.info(f"  🔝 Bull Market Peak: {hit_count}/{total} индикаторов сработали")
+
+    # AHR999 — индекс для определения зоны покупки BTC
+    ahr = CG_INDICATOR_CACHE.get("ahr999", {}).get("data")
+    if ahr:
+        # Может быть список или dict
+        if isinstance(ahr, list) and len(ahr) > 0:
+            last = ahr[-1] if isinstance(ahr[-1], dict) else {}
+            ahr999_val = last.get("ahr999") or last.get("value")
+        elif isinstance(ahr, dict):
+            ahr999_val = ahr.get("ahr999") or ahr.get("value")
+        else:
+            ahr999_val = None
+        if ahr999_val is not None:
+            try:
+                result["ahr999"] = round(float(ahr999_val), 3)
+                # AHR999 < 0.45 = зона покупки, > 1.2 = зона продажи
+                log.info(f"  📊 AHR999: {result['ahr999']}")
+            except (ValueError, TypeError):
+                pass
+
+    # Bitcoin Bubble Index
+    bubble = CG_INDICATOR_CACHE.get("bitcoin_bubble", {}).get("data")
+    if bubble:
+        if isinstance(bubble, list) and len(bubble) > 0:
+            last = bubble[-1] if isinstance(bubble[-1], dict) else {}
+            bubble_val = last.get("index") or last.get("value") or last.get("bubbleIndex")
+        elif isinstance(bubble, dict):
+            bubble_val = bubble.get("index") or bubble.get("value") or bubble.get("bubbleIndex")
+        else:
+            bubble_val = None
+        if bubble_val is not None:
+            try:
+                result["bitcoin_bubble"] = round(float(bubble_val), 1)
+                log.info(f"  🫧 Bitcoin Bubble Index: {result['bitcoin_bubble']}")
+            except (ValueError, TypeError):
+                pass
+
+    # BTC ETF flows
+    etf = CG_INDICATOR_CACHE.get("btc_etf", {}).get("data")
+    if etf and isinstance(etf, list):
+        # Суммируем потоки всех ETF
+        total_netflow = 0
+        has_data = False
+        for item in etf:
+            if isinstance(item, dict):
+                nf = item.get("netFlow") or item.get("net_flow") or item.get("netflow")
+                if nf is not None:
+                    try:
+                        total_netflow += float(nf)
+                        has_data = True
+                    except (ValueError, TypeError):
+                        pass
+        if has_data:
+            result["etf_netflow"] = round(total_netflow, 2)
+            direction = "приток" if total_netflow > 0 else "отток"
+            log.info(f"  💰 BTC ETF Netflow: ${total_netflow:,.0f} ({direction})")
+
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEFI LLAMA (бесплатно, без API ключа!)
+# ══════════════════════════════════════════════════════════════════════════════
+
+DEFILLAMA_CACHE = {}
+DEFILLAMA_CACHE_TTL = 2 * 3600  # 2 часа
+
+
+async def fetch_defillama_data() -> dict:
+    """
+    Бесплатные данные из DeFiLlama:
+    - Stablecoins market cap (USDT, USDC, etc.)
+    - Общий TVL DeFi
+    """
+    result = {}
+
+    # ── Stablecoins общая капитализация ──
+    if "stablecoins" in DEFILLAMA_CACHE and (time.time() - DEFILLAMA_CACHE["stablecoins"]["ts"]) < DEFILLAMA_CACHE_TTL:
+        return DEFILLAMA_CACHE["stablecoins"]["data"]
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Stablecoins overview
+            resp = await client.get("https://stablecoins.llama.fi/stablecoins?includePrices=true")
+            if resp.status_code == 200:
+                data = resp.json()
+                stables = data.get("peggedAssets", [])
+                total_mcap = 0
+                for s in stables:
+                    # Суммируем market cap всех стейблкоинов
+                    chains = s.get("chainCirculating", {})
+                    for chain_data in chains.values():
+                        current = chain_data.get("current", {})
+                        peggedUSD = current.get("peggedUSD", 0)
+                        if peggedUSD:
+                            try:
+                                total_mcap += float(peggedUSD)
+                            except (ValueError, TypeError):
+                                pass
+                if total_mcap > 0:
+                    result["stablecoin_mcap"] = total_mcap
+                    log.info(f"  💵 Stablecoin Market Cap: ${total_mcap/1e9:.1f}B")
+
+            await asyncio.sleep(1)
+
+            # Общий TVL DeFi
+            resp2 = await client.get("https://api.llama.fi/v2/historicalChainTvl")
+            if resp2.status_code == 200:
+                tvl_data = resp2.json()
+                if isinstance(tvl_data, list) and len(tvl_data) > 0:
+                    last_tvl = tvl_data[-1]
+                    tvl_val = last_tvl.get("tvl")
+                    if tvl_val:
+                        result["defi_tvl"] = float(tvl_val)
+                        log.info(f"  🏦 DeFi TVL: ${float(tvl_val)/1e9:.1f}B")
+
+                    # Изменение TVL за день
+                    if len(tvl_data) >= 2:
+                        prev_tvl = tvl_data[-2].get("tvl")
+                        if prev_tvl and float(prev_tvl) > 0:
+                            tvl_change = ((float(tvl_val) - float(prev_tvl)) / float(prev_tvl)) * 100
+                            result["defi_tvl_change"] = round(tvl_change, 2)
+
+    except Exception as e:
+        log.warning(f"DeFiLlama error: {e}")
+
+    if result:
+        DEFILLAMA_CACHE["stablecoins"] = {"data": result, "ts": time.time()}
+
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WHALE ALERT (бесплатно, 10 req/min, нужен API key — регистрация бесплатная)
+# ══════════════════════════════════════════════════════════════════════════════
+
+WHALE_CACHE = {}
+WHALE_CACHE_TTL = 15 * 60  # 15 минут (совпадает с циклом бота)
+
+
+async def fetch_whale_transactions() -> dict:
+    """
+    Крупные BTC транзакции за последний час.
+    Whale Alert API: бесплатный tier = 10 req/min, транзакции > $500K.
+    Если нет API ключа — пропускаем.
+    """
+    if not HAS_WHALE_ALERT:
+        return {}
+
+    # Проверяем кэш
+    if "whales" in WHALE_CACHE and (time.time() - WHALE_CACHE["whales"]["ts"]) < WHALE_CACHE_TTL:
+        return WHALE_CACHE["whales"]["data"]
+
+    result = {}
+    try:
+        # Последний час
+        since = int(time.time()) - 3600
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{WHALE_ALERT_BASE}/transactions",
+                params={
+                    "api_key": WHALE_ALERT_KEY,
+                    "min_value": 1000000,  # $1M+ транзакции
+                    "currency": "btc",
+                    "start": since,
+                }
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                txs = data.get("transactions", [])
+                if txs:
+                    # Считаем статистику
+                    to_exchange = 0  # BTC на биржи (медвежий)
+                    from_exchange = 0  # BTC с бирж (бычий)
+                    total_volume = 0
+
+                    for tx in txs:
+                        amount_usd = tx.get("amount_usd", 0)
+                        total_volume += amount_usd
+
+                        # Определяем направление
+                        from_owner = (tx.get("from", {}).get("owner_type", "") or "").lower()
+                        to_owner = (tx.get("to", {}).get("owner_type", "") or "").lower()
+
+                        if to_owner == "exchange" and from_owner != "exchange":
+                            to_exchange += amount_usd
+                        elif from_owner == "exchange" and to_owner != "exchange":
+                            from_exchange += amount_usd
+
+                    result["whale_tx_count"] = len(txs)
+                    result["whale_volume_usd"] = total_volume
+                    result["whale_to_exchange"] = to_exchange
+                    result["whale_from_exchange"] = from_exchange
+
+                    log.info(f"  🐋 Whale Alert: {len(txs)} транзакций, ${total_volume/1e6:.1f}M | на биржи: ${to_exchange/1e6:.1f}M | с бирж: ${from_exchange/1e6:.1f}M")
+            elif resp.status_code == 401:
+                log.warning("  ⚠️ Whale Alert: 401 — нужен API ключ (WHALE_ALERT_KEY)")
+            else:
+                log.warning(f"  ⚠️ Whale Alert: HTTP {resp.status_code}")
+
+    except Exception as e:
+        log.warning(f"Whale Alert error: {e}")
+
+    if result:
+        WHALE_CACHE["whales"] = {"data": result, "ts": time.time()}
+    return result
+
+
 async def fetch_onchain_data(symbol: str) -> dict:
     """
     On-chain метрики для BTC (бесплатные API, без ключа).
@@ -598,6 +876,19 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     sma50 = coin_data.get("sma50")
     sma200 = coin_data.get("sma200")
 
+    # Новые индикаторы
+    ahr999 = coin_data.get("ahr999")
+    bull_peak_ratio = coin_data.get("bull_peak_ratio")
+    bull_peak_pct = coin_data.get("bull_peak_pct")
+    bitcoin_bubble = coin_data.get("bitcoin_bubble")
+    etf_netflow = coin_data.get("etf_netflow")
+    stablecoin_mcap = coin_data.get("stablecoin_mcap")
+    defi_tvl = coin_data.get("defi_tvl")
+    defi_tvl_change = coin_data.get("defi_tvl_change")
+    whale_tx_count = coin_data.get("whale_tx_count")
+    whale_to_exchange = coin_data.get("whale_to_exchange")
+    whale_from_exchange = coin_data.get("whale_from_exchange")
+
     # Блок on-chain + технических данных для промпта
     onchain_block = ""
     onchain_lines = []
@@ -629,6 +920,34 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             else:
                 onchain_lines.append(f"- SMA50/200: death cross (SMA50 ${sma50:,.0f} < SMA200 ${sma200:,.0f}) — медвежий")
 
+    # Макро/индикаторы блок
+    if any([ahr999, bull_peak_ratio, bitcoin_bubble, etf_netflow, stablecoin_mcap, defi_tvl]):
+        onchain_lines.append(f"\nМАКРО ИНДИКАТОРЫ:")
+        if ahr999 is not None:
+            ahr_hint = "зона накопления (покупка)" if ahr999 < 0.45 else "переоценён (продажа)" if ahr999 > 1.2 else "нормальная зона"
+            onchain_lines.append(f"- AHR999: {ahr999} — {ahr_hint}")
+        if bull_peak_ratio:
+            onchain_lines.append(f"- Bull Market Peak: {bull_peak_ratio} индикаторов сработали ({bull_peak_pct}%)")
+        if bitcoin_bubble is not None:
+            onchain_lines.append(f"- Bitcoin Bubble Index: {bitcoin_bubble}")
+        if etf_netflow is not None:
+            etf_dir = "приток (институционалы покупают)" if etf_netflow > 0 else "отток (институционалы продают)"
+            onchain_lines.append(f"- BTC ETF Netflow: ${etf_netflow:,.0f} — {etf_dir}")
+        if stablecoin_mcap is not None:
+            onchain_lines.append(f"- Стейблкоины (общ. капитализация): ${stablecoin_mcap/1e9:.1f}B")
+        if defi_tvl is not None:
+            tvl_hint = f" ({'+' if defi_tvl_change > 0 else ''}{defi_tvl_change:.1f}% за день)" if defi_tvl_change else ""
+            onchain_lines.append(f"- DeFi TVL: ${defi_tvl/1e9:.1f}B{tvl_hint}")
+
+    # Whale Alert блок
+    if whale_tx_count:
+        onchain_lines.append(f"\nКИТЫ (транзакции >$1M за последний час):")
+        onchain_lines.append(f"- Количество: {whale_tx_count} транзакций")
+        if whale_to_exchange:
+            onchain_lines.append(f"- На биржи: ${whale_to_exchange/1e6:.1f}M (готовятся продавать)")
+        if whale_from_exchange:
+            onchain_lines.append(f"- С бирж: ${whale_from_exchange/1e6:.1f}M (холдят — бычий)")
+
     if onchain_lines:
         onchain_block = "\n".join(onchain_lines)
 
@@ -655,6 +974,9 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 - SOPR < 1 (капитуляция — дно может быть близко)
 - RSI < 30 (перепродан — разворот вверх вероятен)
 - MACD > 0 и растёт (бычий импульс)
+- AHR999 < 0.45 (зона накопления — покупай)
+- BTC ETF netflow > 0 (институционалы покупают)
+- Киты выводят с бирж > заводят на биржи (холдят — бычий)
 
 ПРОДАВАТЬ если 2+ условий совпадают:
 - Продавцы > 52% (медведи доминируют)
@@ -666,6 +988,10 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 - SOPR > 1.05 (массово фиксируют прибыль — возможна коррекция)
 - RSI > 70 (перекуплен — коррекция вероятна)
 - MACD < 0 и падает (медвежий импульс)
+- AHR999 > 1.2 (переоценён — продавай)
+- BTC ETF netflow < 0 (институционалы продают)
+- Bull Market Peak > 60% индикаторов сработали (пик рынка вероятен)
+- Киты заводят на биржи > выводят (готовятся продавать — медвежий)
 
 ПРИОРИТЕТ ТРЕНДА (САМОЕ ВАЖНОЕ ПРАВИЛО!):
 Технический тренд ВАЖНЕЕ сентимента. Страх и SOPR < 1 — это НЕ автоматический сигнал покупки!
@@ -724,10 +1050,13 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 
                 if upper.startswith("АНАЛИЗ:") or upper.startswith("АНАЛИЗ :"):
                     val = clean.split(":", 1)[1].strip() if ":" in clean else ""
+                    val = val.replace("**", "").replace("__", "")  # убираем markdown bold
                     if val:
                         result["llm_text"] = val
                 elif upper.startswith("РЕКОМЕНДАЦИЯ:") or upper.startswith("РЕКОМЕНДАЦИЯ :"):
                     val = clean.split(":", 1)[1].strip().lower() if ":" in clean else ""
+                    # Убираем markdown звёздочки (**bold**) и подчёркивания
+                    val = val.replace("*", "").replace("_", "").strip()
                     if val:
                         result["recommendation"] = val
                 elif upper.startswith("ЗОНЫ:") or upper.startswith("ЗОНЫ :"):
@@ -863,6 +1192,37 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
         elif macd < 0:
             bear += 1  # медвежий импульс
 
+    # 11. AHR999 (Coinglass)
+    ahr999 = coin_data.get("ahr999")
+    if ahr999 is not None:
+        if ahr999 < 0.45:
+            bull += 1  # зона накопления
+        elif ahr999 > 1.2:
+            bear += 1  # переоценён
+
+    # 12. BTC ETF Netflow
+    etf_netflow = coin_data.get("etf_netflow")
+    if etf_netflow is not None:
+        if etf_netflow > 50_000_000:  # > $50M приток
+            bull += 1  # институционалы покупают
+        elif etf_netflow < -50_000_000:  # > $50M отток
+            bear += 1  # институционалы продают
+
+    # 13. Bull Market Peak
+    bull_peak_pct = coin_data.get("bull_peak_pct")
+    if bull_peak_pct is not None:
+        if bull_peak_pct > 60:
+            bear += 1  # более 60% индикаторов пика сработали
+
+    # 14. Whale Alert: киты на/с бирж
+    whale_to = coin_data.get("whale_to_exchange", 0) or 0
+    whale_from = coin_data.get("whale_from_exchange", 0) or 0
+    if whale_to > 0 or whale_from > 0:
+        if whale_from > whale_to * 1.5:
+            bull += 1  # киты выводят больше чем заводят
+        elif whale_to > whale_from * 1.5:
+            bear += 1  # киты заводят больше чем выводят
+
     # Сила = максимум из бычьих/медвежьих
     strength = max(bull, bear)
 
@@ -898,6 +1258,16 @@ async def collect_all():
 
     # Обновляем кэш BGeometrics (реальные запросы только если кэш устарел)
     await fetch_bgeometrics_batch()
+
+    # Обновляем Coinglass индикаторы (кэш 4ч)
+    await fetch_cg_indicators()
+    cg_indicators = parse_cg_indicators()
+
+    # DeFiLlama: стейблкоины + TVL (бесплатно)
+    defillama_data = await fetch_defillama_data()
+
+    # Whale Alert: крупные BTC транзакции (бесплатно, если есть ключ)
+    whale_data = await fetch_whale_transactions()
 
     # Общие данные
     fg_data = await fetch_fear_greed()
@@ -973,6 +1343,9 @@ async def collect_all():
                 **liq_data,
                 **fg_data,
                 **gn_data,
+                **cg_indicators,      # Bull Market Peak, AHR999, Bubble, ETF
+                **defillama_data,     # Stablecoin mcap, DeFi TVL
+                **(whale_data if symbol == "BTC" else {}),  # Whale Alert только для BTC
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -1016,9 +1389,17 @@ async def collect_all():
                 "sma50": fmt_price(coin_data.get("sma50")),
                 "sma200": fmt_price(coin_data.get("sma200")),
                 "exchange_flow": "—",
-                "whale_buy1h": "—",
-                "whale_buy24h": "—",
-                "whale_sell24h": "—",
+                "whale_tx_count": str(coin_data.get("whale_tx_count", "—")),
+                "whale_volume_usd": fmt_usd(coin_data.get("whale_volume_usd")) if coin_data.get("whale_volume_usd") else "—",
+                "whale_to_exchange": fmt_usd(coin_data.get("whale_to_exchange")) if coin_data.get("whale_to_exchange") else "—",
+                "whale_from_exchange": fmt_usd(coin_data.get("whale_from_exchange")) if coin_data.get("whale_from_exchange") else "—",
+                "stablecoin_mcap": fmt_usd(coin_data.get("stablecoin_mcap")) if coin_data.get("stablecoin_mcap") else "—",
+                "defi_tvl": fmt_usd(coin_data.get("defi_tvl")) if coin_data.get("defi_tvl") else "—",
+                "defi_tvl_change": fmt_pct(coin_data.get("defi_tvl_change")),
+                "etf_netflow": fmt_usd(coin_data.get("etf_netflow")) if coin_data.get("etf_netflow") else "—",
+                "ahr999": str(round(coin_data["ahr999"], 3)) if coin_data.get("ahr999") else "—",
+                "bull_peak_ratio": coin_data.get("bull_peak_ratio", "—"),
+                "bitcoin_bubble": str(coin_data.get("bitcoin_bubble", "—")),
                 "fear_greed": str(coin_data.get("fear_greed", "—")),
                 "fear_greed_label": coin_data.get("fear_greed_label", "—"),
                 "signal": signal_bar,
