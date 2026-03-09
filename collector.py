@@ -10,6 +10,7 @@ ZENDER COMMANDER TERMINAL — Data Collector
 import asyncio
 import logging
 import httpx
+import time
 from datetime import datetime, timezone
 
 from config import COINGLASS_API_KEY
@@ -302,6 +303,29 @@ async def fetch_fear_greed() -> dict:
 BLOCKCHAIN_INFO_BASE = "https://api.blockchain.info/charts"
 BGEOMETRICS_BASE = "https://bitcoin-data.com/v1"  # BGeometrics API v1 (бесплатно, 8 req/hour)
 
+# ── BGeometrics кэш ──────────────────────────────────────────────────────────
+# Лимит: 8 req/hour, 15 req/day!
+# Стратегия: кэшируем на 6 часов, 3-4 метрики × 4 обновления/день = 12-16 req/day
+# On-chain данные обновляются раз в день — кэш 6ч более чем достаточно
+BGEOMETRICS_CACHE = {}  # {metric: {"data": ..., "ts": time.time()}}
+BGEOMETRICS_CACHE_TTL = 6 * 3600  # 6 часов в секундах
+
+# Метрики BGeometrics для сбора (правильные названия из документации!)
+BGEOMETRICS_METRICS = [
+    "sopr",                  # SOPR (>1 прибыль, <1 убыток)
+    "exchange-reserve-btc",  # Общий баланс BTC на биржах
+    "exchange-netflow-btc",  # Нетто поток: inflow - outflow
+    "technical-indicators",  # RSI, MACD, SMA, EMA (всё в одном!)
+]
+
+
+def bgeometrics_cache_valid(metric: str) -> bool:
+    """Проверяет, актуален ли кэш для метрики."""
+    if metric not in BGEOMETRICS_CACHE:
+        return False
+    cached = BGEOMETRICS_CACHE[metric]
+    return (time.time() - cached["ts"]) < BGEOMETRICS_CACHE_TTL
+
 
 async def blockchain_chart_get(metric: str) -> list | None:
     """Запрос к Blockchain.info Charts API. Возвращает values или None."""
@@ -376,11 +400,47 @@ def parse_chart_values(values: list | None) -> tuple:
         return None, None
 
 
+async def fetch_bgeometrics_batch():
+    """
+    Загружает все BGeometrics метрики с кэшированием.
+    Вызывается раз за цикл collect_all(), но реально делает HTTP-запросы
+    только если кэш устарел (каждые 6 часов).
+    Лимит: 8 req/hour, 15 req/day — кэш экономит запросы.
+    """
+    metrics_to_fetch = [m for m in BGEOMETRICS_METRICS if not bgeometrics_cache_valid(m)]
+
+    if not metrics_to_fetch:
+        log.info("  🔗 BGeometrics: все метрики в кэше (ещё актуальны)")
+        return
+
+    log.info(f"  🔗 BGeometrics: обновляем {len(metrics_to_fetch)} метрик: {metrics_to_fetch}")
+
+    for metric in metrics_to_fetch:
+        try:
+            data = await bgeometrics_get(metric, last=True)
+            if data:
+                BGEOMETRICS_CACHE[metric] = {"data": data, "ts": time.time()}
+                log.info(f"  ✅ BGeometrics {metric}: OK")
+            else:
+                log.warning(f"  ⚠️ BGeometrics {metric}: пустой ответ")
+            # Задержка между запросами (8 req/hour = 1 каждые 7.5 мин)
+            await asyncio.sleep(2)
+        except Exception as e:
+            log.error(f"  ❌ BGeometrics {metric}: {e}")
+
+
+def get_cached_bgeometrics(metric: str) -> dict | list | None:
+    """Получает данные из кэша BGeometrics."""
+    if metric in BGEOMETRICS_CACHE:
+        return BGEOMETRICS_CACHE[metric]["data"]
+    return None
+
+
 async def fetch_onchain_data(symbol: str) -> dict:
     """
     On-chain метрики для BTC (бесплатные API, без ключа).
     Blockchain.info: активные адреса, транзакции.
-    BGeometrics: SOPR, баланс на биржах.
+    BGeometrics (кэш): SOPR, Exchange Reserve, Exchange Netflow, RSI/MACD.
     Для не-BTC монет — пустой dict.
     """
     if symbol != "BTC":
@@ -388,6 +448,7 @@ async def fetch_onchain_data(symbol: str) -> dict:
 
     result = {}
 
+    # ── Blockchain.info: адреса + транзакции ──
     try:
         active_data, tx_data = await asyncio.gather(
             blockchain_chart_get("n-unique-addresses"),
@@ -398,7 +459,6 @@ async def fetch_onchain_data(symbol: str) -> dict:
         log.warning(f"On-chain gather error: {e}")
         return {}
 
-    # Обработка исключений из gather
     if isinstance(active_data, Exception):
         active_data = None
     if isinstance(tx_data, Exception):
@@ -414,61 +474,70 @@ async def fetch_onchain_data(symbol: str) -> dict:
     if val:
         result["tx_count"] = int(val)
 
-    # Exchange Balance — берём из Coinglass (уже платим STARTUP $95/мес)
+    # ── BGeometrics: SOPR (из кэша) ──
     try:
-        exch_data = await cg_get("/api/exchange/balance/list", {"symbol": "BTC"})
-        if exch_data and isinstance(exch_data, list):
-            # Ищем агрегат "All" или суммируем по биржам
-            total_balance = 0.0
-            for item in exch_data:
-                try:
-                    bal = float(item.get("balance") or item.get("total") or 0)
-                    total_balance += bal
-                except (ValueError, TypeError):
-                    pass
-            if total_balance > 0:
-                result["exchange_balance"] = total_balance
-                # Считаем изменение если есть поле change
-                for item in exch_data:
-                    change_pct = item.get("change_percent_1d") or item.get("balance_change_percent_1d")
-                    if change_pct is not None:
-                        try:
-                            result["exchange_balance_change"] = float(change_pct)
-                        except (ValueError, TypeError):
-                            pass
-                        break
-                log.info(f"  🏦 Exchange Balance BTC: {total_balance:,.0f} BTC")
-        elif exch_data and isinstance(exch_data, dict):
-            # Может вернуть dict с общими данными
-            bal = exch_data.get("balance") or exch_data.get("total")
-            if bal:
-                result["exchange_balance"] = float(bal)
-                change_pct = exch_data.get("change_percent_1d") or exch_data.get("balance_change_percent_1d")
-                if change_pct is not None:
-                    result["exchange_balance_change"] = float(change_pct)
-                log.info(f"  🏦 Exchange Balance BTC: {float(bal):,.0f} BTC")
-    except Exception as e:
-        log.warning(f"Exchange Balance error: {e}")
-
-    # SOPR — BGeometrics API v1 (bitcoin-data.com/v1/sopr)
-    # Бесплатно, без ключа, лимит 8 req/hour
-    try:
-        sopr_data = await bgeometrics_get("sopr", last=True)
+        sopr_data = get_cached_bgeometrics("sopr")
         if sopr_data and isinstance(sopr_data, dict):
-            # Ответ: {"d": "2026-03-08", "unixTs": ..., "sopr": 1.02}
             sopr_val = sopr_data.get("sopr")
             if sopr_val is not None:
                 result["sopr"] = float(sopr_val)
                 log.info(f"  📊 SOPR BTC: {sopr_val}")
         elif sopr_data and isinstance(sopr_data, list) and len(sopr_data) > 0:
-            # Если вернул массив — берём последний элемент
             last_item = sopr_data[-1]
             sopr_val = last_item.get("sopr") if isinstance(last_item, dict) else None
             if sopr_val is not None:
                 result["sopr"] = float(sopr_val)
-                log.info(f"  📊 SOPR BTC: {sopr_val}")
     except Exception as e:
-        log.warning(f"SOPR error: {e}")
+        log.warning(f"SOPR parse error: {e}")
+
+    # ── BGeometrics: Exchange Reserve BTC (из кэша) ──
+    try:
+        reserve_data = get_cached_bgeometrics("exchange-reserve-btc")
+        if reserve_data and isinstance(reserve_data, dict):
+            # Ожидаемый формат: {"d": "2026-03-08", "exchangeReserveBtc": 2345678.12}
+            reserve_val = reserve_data.get("exchangeReserveBtc") or reserve_data.get("exchange_reserve_btc") or reserve_data.get("value")
+            if reserve_val is not None:
+                result["exchange_reserve_btc"] = float(reserve_val)
+                log.info(f"  🏦 Exchange Reserve BTC: {float(reserve_val):,.0f}")
+    except Exception as e:
+        log.warning(f"Exchange Reserve parse error: {e}")
+
+    # ── BGeometrics: Exchange Netflow BTC (из кэша) ──
+    try:
+        netflow_data = get_cached_bgeometrics("exchange-netflow-btc")
+        if netflow_data and isinstance(netflow_data, dict):
+            # Ожидаемый формат: {"d": "...", "exchangeNetflowBtc": -1234.56}
+            netflow_val = netflow_data.get("exchangeNetflowBtc") or netflow_data.get("exchange_netflow_btc") or netflow_data.get("value")
+            if netflow_val is not None:
+                result["exchange_netflow_btc"] = float(netflow_val)
+                direction = "📤 выводят (бычий)" if float(netflow_val) < 0 else "📥 заводят (медвежий)"
+                log.info(f"  🔄 Exchange Netflow BTC: {float(netflow_val):,.2f} — {direction}")
+    except Exception as e:
+        log.warning(f"Exchange Netflow parse error: {e}")
+
+    # ── BGeometrics: Technical Indicators — RSI, MACD, SMA, EMA (из кэша) ──
+    try:
+        tech_data = get_cached_bgeometrics("technical-indicators")
+        if tech_data and isinstance(tech_data, dict):
+            # Ожидаемый формат: {"d": "...", "rsi": 45.2, "macd": ..., "sma7": ..., ...}
+            rsi_val = tech_data.get("rsi") or tech_data.get("RSI")
+            if rsi_val is not None:
+                result["rsi"] = float(rsi_val)
+                log.info(f"  📈 RSI BTC: {float(rsi_val):.1f}")
+
+            macd_val = tech_data.get("macd") or tech_data.get("MACD")
+            if macd_val is not None:
+                result["macd"] = float(macd_val)
+
+            sma50_val = tech_data.get("sma50") or tech_data.get("SMA50")
+            if sma50_val is not None:
+                result["sma50"] = float(sma50_val)
+
+            sma200_val = tech_data.get("sma200") or tech_data.get("SMA200")
+            if sma200_val is not None:
+                result["sma200"] = float(sma200_val)
+    except Exception as e:
+        log.warning(f"Technical Indicators parse error: {e}")
 
     if result:
         log.info(f"  🔗 On-chain BTC: {list(result.keys())}")
@@ -521,25 +590,46 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     # On-chain данные
     active_addr = coin_data.get("active_addresses")
     active_addr_change = coin_data.get("active_addresses_change")
-    exchange_bal = coin_data.get("exchange_balance")
-    exchange_bal_change = coin_data.get("exchange_balance_change")
+    exchange_reserve = coin_data.get("exchange_reserve_btc")
+    exchange_netflow = coin_data.get("exchange_netflow_btc")
     sopr = coin_data.get("sopr")
-    new_addr = coin_data.get("new_addresses")
+    rsi = coin_data.get("rsi")
+    macd = coin_data.get("macd")
+    sma50 = coin_data.get("sma50")
+    sma200 = coin_data.get("sma200")
 
-    # Блок on-chain данных для промпта
+    # Блок on-chain + технических данных для промпта
     onchain_block = ""
-    if any([active_addr, exchange_bal, sopr, new_addr]):
-        onchain_lines = [f"\nON-CHAIN ДАННЫЕ (BTC блокчейн):"]
+    onchain_lines = []
+    if any([active_addr, exchange_reserve, exchange_netflow, sopr]):
+        onchain_lines.append(f"\nON-CHAIN ДАННЫЕ (BTC блокчейн):")
         if active_addr:
             onchain_lines.append(f"- Активные адреса: {active_addr:,} ({safe_pct(active_addr_change)} за день)")
-        if new_addr:
-            onchain_lines.append(f"- Новые адреса: {new_addr:,}")
-        if exchange_bal:
-            direction = "выводят с бирж (бычий)" if exchange_bal_change and exchange_bal_change < 0 else "заводят на биржи (медвежий)" if exchange_bal_change and exchange_bal_change > 0 else "стабильно"
-            onchain_lines.append(f"- Баланс на биржах: {exchange_bal:,.0f} ({safe_pct(exchange_bal_change)} за день) — {direction}")
+        if exchange_reserve:
+            onchain_lines.append(f"- Резерв BTC на биржах: {exchange_reserve:,.0f} BTC")
+        if exchange_netflow is not None:
+            direction = "ОТТОК с бирж (бычий — холдят)" if exchange_netflow < 0 else "ПРИТОК на биржи (медвежий — готовятся продавать)" if exchange_netflow > 0 else "баланс"
+            onchain_lines.append(f"- Нетто поток бирж: {exchange_netflow:,.2f} BTC — {direction}")
         if sopr:
             sopr_hint = "продают в прибыль" if sopr > 1 else "продают в убыток (капитуляция)" if sopr < 1 else "безубыток"
             onchain_lines.append(f"- SOPR: {sopr} — {sopr_hint}")
+
+    # Технические индикаторы
+    if any([rsi, macd, sma50, sma200]):
+        onchain_lines.append(f"\nТЕХНИЧЕСКИЕ ИНДИКАТОРЫ:")
+        if rsi is not None:
+            rsi_hint = "перекуплен (>70)" if rsi > 70 else "перепродан (<30)" if rsi < 30 else "нейтральная зона"
+            onchain_lines.append(f"- RSI: {rsi:.1f} — {rsi_hint}")
+        if macd is not None:
+            macd_hint = "бычий импульс" if macd > 0 else "медвежий импульс"
+            onchain_lines.append(f"- MACD: {macd:.2f} — {macd_hint}")
+        if sma50 and sma200:
+            if sma50 > sma200:
+                onchain_lines.append(f"- SMA50/200: golden cross (SMA50 ${sma50:,.0f} > SMA200 ${sma200:,.0f}) — бычий")
+            else:
+                onchain_lines.append(f"- SMA50/200: death cross (SMA50 ${sma50:,.0f} < SMA200 ${sma200:,.0f}) — медвежий")
+
+    if onchain_lines:
         onchain_block = "\n".join(onchain_lines)
 
     prompt = f"""Ты — опытный крипто-аналитик. Проанализируй данные {symbol} и дай РЕШИТЕЛЬНЫЙ анализ.
@@ -561,8 +651,10 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 - Funding Rate отрицательный (шорты переплачивают — разворот вверх вероятен)
 - Fear & Greed < 30 (сильный страх — возможность покупки на панике)
 - Ликвидации шортов > ликвидаций лонгов в 2+ раза (шортов выдавливают)
-- Баланс на биржах падает (выводят на холодные кошельки — бычий сигнал)
+- Нетто поток бирж отрицательный (BTC выводят — холдят — бычий)
 - SOPR < 1 (капитуляция — дно может быть близко)
+- RSI < 30 (перепродан — разворот вверх вероятен)
+- MACD > 0 и растёт (бычий импульс)
 
 ПРОДАВАТЬ если 2+ условий совпадают:
 - Продавцы > 52% (медведи доминируют)
@@ -570,8 +662,10 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 - Funding Rate > +0.05% (лонги переплачивают — рынок перегрет)
 - Fear & Greed > 75 (сильная жадность — пора фиксировать прибыль)
 - Ликвидации лонгов > ликвидаций шортов в 2+ раза (лонги ликвидируют)
-- Баланс на биржах растёт (заводят для продажи — медвежий сигнал)
+- Нетто поток бирж положительный (BTC заводят на биржи — медвежий)
 - SOPR > 1.05 (массово фиксируют прибыль — возможна коррекция)
+- RSI > 70 (перекуплен — коррекция вероятна)
+- MACD < 0 и падает (медвежий импульс)
 
 ВЫЖИДАТЬ только если сигналы явно противоречат друг другу и нет перевеса ни в одну сторону.
 
@@ -726,13 +820,13 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
         except (ValueError, TypeError):
             pass
 
-    # 7. On-chain: баланс на биржах (Glassnode)
-    exchange_bal_change = coin_data.get("exchange_balance_change")
-    if exchange_bal_change is not None:
-        if exchange_bal_change < -0.5:
-            bull += 1  # выводят с бирж → холдят → бычий
-        elif exchange_bal_change > 0.5:
-            bear += 1  # заводят на биржи → готовятся продавать
+    # 7. On-chain: Exchange Netflow (BGeometrics)
+    exchange_netflow = coin_data.get("exchange_netflow_btc")
+    if exchange_netflow is not None:
+        if exchange_netflow < -500:
+            bull += 1  # отток с бирж → холдят → бычий (>500 BTC)
+        elif exchange_netflow > 500:
+            bear += 1  # приток на биржи → готовятся продавать (>500 BTC)
 
     # 8. On-chain: SOPR
     sopr = coin_data.get("sopr")
@@ -741,6 +835,22 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
             bull += 1  # капитуляция → дно близко
         elif sopr > 1.05:
             bear += 1  # массово фиксируют прибыль
+
+    # 9. RSI (технический индикатор)
+    rsi = coin_data.get("rsi")
+    if rsi is not None:
+        if rsi < 30:
+            bull += 1  # перепродан → разворот вверх
+        elif rsi > 70:
+            bear += 1  # перекуплен → коррекция
+
+    # 10. MACD
+    macd = coin_data.get("macd")
+    if macd is not None:
+        if macd > 0:
+            bull += 1  # бычий импульс
+        elif macd < 0:
+            bear += 1  # медвежий импульс
 
     # Сила = максимум из бычьих/медвежьих
     strength = max(bull, bear)
@@ -774,6 +884,9 @@ async def collect_all():
     Собирает данные по всем монетам + LLM-анализ, сохраняет в Supabase.
     """
     log.info("📡 Начинаем сбор данных...")
+
+    # Обновляем кэш BGeometrics (реальные запросы только если кэш устарел)
+    await fetch_bgeometrics_batch()
 
     # Общие данные
     fg_data = await fetch_fear_greed()
@@ -884,10 +997,13 @@ async def collect_all():
                 "mkt_liq_short": fmt_usd(total_liq_short_1h),
                 "active_addresses": str(coin_data.get("active_addresses", "—")),
                 "active_addresses_change": fmt_pct(coin_data.get("active_addresses_change")),
-                "exchange_balance": fmt_usd(coin_data.get("exchange_balance")) if coin_data.get("exchange_balance") else "—",
-                "exchange_balance_change": fmt_pct(coin_data.get("exchange_balance_change")),
+                "exchange_reserve_btc": f"{coin_data['exchange_reserve_btc']:,.0f}" if coin_data.get("exchange_reserve_btc") else "—",
+                "exchange_netflow_btc": f"{coin_data['exchange_netflow_btc']:+,.2f}" if coin_data.get("exchange_netflow_btc") is not None else "—",
                 "sopr": str(round(coin_data["sopr"], 4)) if coin_data.get("sopr") else "—",
-                "new_addresses": str(coin_data.get("new_addresses", "—")),
+                "rsi": f"{coin_data['rsi']:.1f}" if coin_data.get("rsi") is not None else "—",
+                "macd": f"{coin_data['macd']:.2f}" if coin_data.get("macd") is not None else "—",
+                "sma50": fmt_price(coin_data.get("sma50")),
+                "sma200": fmt_price(coin_data.get("sma200")),
                 "exchange_flow": "—",
                 "whale_buy1h": "—",
                 "whale_buy24h": "—",

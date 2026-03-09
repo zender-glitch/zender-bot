@@ -257,22 +257,33 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     # ── ON-CHAIN ──
     active_addr = d.get("active_addresses", "—")
     active_addr_chg = d.get("active_addresses_change", "—")
-    exchange_bal = d.get("exchange_balance", "—")
-    exchange_bal_chg = d.get("exchange_balance_change", "—")
+    exchange_reserve = d.get("exchange_reserve_btc", "—")
+    exchange_netflow = d.get("exchange_netflow_btc", "—")
     sopr_val = d.get("sopr", "—")
-    new_addr = d.get("new_addresses", "—")
 
-    has_onchain = _has(active_addr) or _has(exchange_bal) or _has(sopr_val)
+    has_onchain = _has(active_addr) or _has(exchange_reserve) or _has(sopr_val) or _has(exchange_netflow)
     if has_onchain:
         lines.append("")
         lines.append("<b>ON-CHAIN</b>")
         if _has(active_addr):
             addr_arrow = _arrow(active_addr_chg)
             lines.append(f"<code>  👥 адреса    {active_addr} {addr_arrow} {active_addr_chg}</code>")
-        if _has(exchange_bal):
-            bal_arrow = _arrow(exchange_bal_chg)
-            # Инвертируем стрелку — падение баланса на биржах = бычий сигнал
-            lines.append(f"<code>  🏦 биржи     {exchange_bal} {bal_arrow} {exchange_bal_chg}</code>")
+        if _has(exchange_reserve):
+            lines.append(f"<code>  🏦 резерв    {exchange_reserve} BTC</code>")
+        if _has(exchange_netflow):
+            try:
+                nf = float(str(exchange_netflow).replace(",", "").replace("+", ""))
+                if nf < 0:
+                    nf_hint = "📤 отток (бычий)"
+                elif nf > 0:
+                    nf_hint = "📥 приток (медвежий)"
+                else:
+                    nf_hint = "баланс"
+            except (ValueError, TypeError):
+                nf_hint = ""
+            lines.append(f"<code>  🔄 поток     {exchange_netflow} BTC</code>")
+            if nf_hint:
+                lines.append(f"<code>              {nf_hint}</code>")
         if _has(sopr_val):
             try:
                 sv = float(sopr_val)
@@ -280,8 +291,51 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             except (ValueError, TypeError):
                 sopr_hint = ""
             lines.append(f"<code>  📊 SOPR      {sopr_val} — {sopr_hint}</code>")
-        if _has(new_addr):
-            lines.append(f"<code>  🆕 новые     {new_addr}</code>")
+
+    # ── ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ ──
+    rsi_val = d.get("rsi", "—")
+    macd_val = d.get("macd", "—")
+    sma50_val = d.get("sma50", "—")
+    sma200_val = d.get("sma200", "—")
+
+    has_tech = _has(rsi_val) or _has(macd_val)
+    if has_tech:
+        lines.append("")
+        lines.append("<b>ТЕХН. ИНДИКАТОРЫ</b>")
+        if _has(rsi_val):
+            try:
+                rv = float(rsi_val)
+                if rv > 70:
+                    rsi_hint = "перекуплен ⚠️"
+                elif rv < 30:
+                    rsi_hint = "перепродан 🔥"
+                elif rv > 60:
+                    rsi_hint = "бычья зона"
+                elif rv < 40:
+                    rsi_hint = "медвежья зона"
+                else:
+                    rsi_hint = "нейтрально"
+            except (ValueError, TypeError):
+                rsi_hint = ""
+            lines.append(f"<code>  📈 RSI       {rsi_val} — {rsi_hint}</code>")
+        if _has(macd_val):
+            try:
+                mv = float(macd_val)
+                macd_hint = "бычий" if mv > 0 else "медвежий"
+            except (ValueError, TypeError):
+                macd_hint = ""
+            lines.append(f"<code>  📉 MACD      {macd_val} — {macd_hint}</code>")
+        if _has(sma50_val) and _has(sma200_val):
+            try:
+                s50 = float(str(sma50_val).replace("$", "").replace(",", ""))
+                s200 = float(str(sma200_val).replace("$", "").replace(",", ""))
+                cross = "golden cross 🔺" if s50 > s200 else "death cross 🔻"
+            except (ValueError, TypeError):
+                cross = ""
+            lines.append(f"<code>  📊 SMA50     {sma50_val}</code>")
+            lines.append(f"<code>  📊 SMA200    {sma200_val}</code>")
+            if cross:
+                lines.append(f"<code>              {cross}</code>")
 
     # ── НАСТРОЕНИЕ ──
     if _has(fg):
