@@ -12,8 +12,11 @@ SUPABASE_URL      = os.getenv("SUPABASE_URL",      "")
 SUPABASE_KEY      = os.getenv("SUPABASE_KEY",      "")
 COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY",  "")
 ANTHROPIC_KEY     = os.getenv("ANTHROPIC_KEY",      "")
+ETHERSCAN_KEY     = os.getenv("ETHERSCAN_KEY",      "")
 # Binance + Bybit: бесплатные public API, ключ НЕ нужен
 # On-chain: бесплатные API (blockchain.info + BGeometrics + DeFiLlama), ключ НЕ нужен
+# Etherscan: бесплатный план (100k calls/day) — ETH on-chain данные
+# Blockchair: бесплатный без ключа — крупные транзакции (киты)
 
 # Проверка при старте
 if not BOT_TOKEN:
