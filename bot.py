@@ -334,9 +334,15 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         try:
             lp = float(long_p)
             sp = float(short_p)
-            lines.append(f"⚔️ Давление: BUY {lp:.0f}% / SELL {sp:.0f}%")
+            if lp > 55:
+                hint = "быки давят"
+            elif sp > 55:
+                hint = "медведи давят"
+            else:
+                hint = "баланс"
+            lines.append(f"⚖️ Лонг/Шорт: {lp:.0f}% / {sp:.0f}% — {hint}")
         except (ValueError, TypeError):
-            lines.append(f"⚔️ Давление: BUY {long_p}% / SELL {short_p}%")
+            lines.append(f"⚖️ Лонг/Шорт: {long_p}% / {short_p}%")
 
     # Фандинг с числом
     if _has(fr_val):
