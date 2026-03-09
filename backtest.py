@@ -156,6 +156,46 @@ async def fetch_ls_history():
     return []
 
 
+async def fetch_oi_history():
+    """Исторический Open Interest из Coinglass"""
+    print("📊 Загружаем OI history...")
+    data = await cg_get("/api/futures/open-interest/ohlc-history", {
+        "symbol": SYMBOL,
+        "interval": "1d",
+        "limit": DAYS + 1,
+    })
+    if data and isinstance(data, list):
+        print(f"  ✅ Получено {len(data)} записей OI")
+        return data
+    # Fallback
+    data = await cg_get("/api/futures/open-interest/ohlc-aggregated-history", {
+        "symbol": SYMBOL,
+        "interval": "1d",
+        "limit": DAYS + 1,
+    })
+    if data and isinstance(data, list):
+        print(f"  ✅ Получено {len(data)} записей OI (aggregated)")
+        return data
+    print("  ⚠️ OI history недоступен")
+    return []
+
+
+async def fetch_funding_rate_history():
+    """Исторический Funding Rate из Coinglass"""
+    print("💰 Загружаем Funding Rate history...")
+    PAIR = f"{SYMBOL}USDT"
+    for params in [
+        {"symbol": SYMBOL, "interval": "1d", "limit": DAYS + 1},
+        {"exchange": "Binance", "symbol": PAIR, "interval": "1d", "limit": DAYS + 1},
+    ]:
+        data = await cg_get("/api/futures/funding-rate/ohlc-history", params)
+        if data and isinstance(data, list):
+            print(f"  ✅ Получено {len(data)} записей FR")
+            return data
+    print("  ⚠️ Funding Rate history недоступен")
+    return []
+
+
 async def fetch_fear_greed_history():
     """Fear & Greed за 14 дней"""
     print("😱 Загружаем Fear & Greed history...")
@@ -313,7 +353,7 @@ async def call_llm(prompt: str) -> dict:
 
 async def run_backtest():
     print("=" * 60)
-    print("🔬 ZENDER BACKTEST v4 — SOPR + RSI + MACD + Netflow")
+    print("🔬 ZENDER BACKTEST v5 — Trend Priority + OI/FR + On-chain")
     print("=" * 60)
     print()
 
@@ -327,10 +367,14 @@ async def run_backtest():
     await asyncio.sleep(1)
     ls_hist = await fetch_ls_history()
     await asyncio.sleep(1)
+    oi_hist = await fetch_oi_history()
+    await asyncio.sleep(1)
+    fr_hist = await fetch_funding_rate_history()
+    await asyncio.sleep(1)
     fg_hist = await fetch_fear_greed_history()
     await asyncio.sleep(1)
 
-    # Новое: BGeometrics история (SOPR, Netflow, RSI, MACD, SMA)
+    # BGeometrics история (SOPR, Netflow, RSI, MACD, SMA)
     bg_hist = await fetch_bgeometrics_history()
 
     print()
@@ -362,6 +406,9 @@ async def run_backtest():
         short_pct = None
         fg_val = None
         fg_label = None
+        oi_val = None
+        oi_change_pct = None
+        fr_val = None
 
         liq_item = find_by_date(liq_hist, date)
         if liq_item:
@@ -372,6 +419,32 @@ async def run_backtest():
         if ls_item:
             long_pct = ls_item.get("longRatio") or ls_item.get("longAccount") or ls_item.get("buyRatio") or ls_item.get("buy_ratio")
             short_pct = ls_item.get("shortRatio") or ls_item.get("shortAccount") or ls_item.get("sellRatio") or ls_item.get("sell_ratio")
+
+        # OI history
+        oi_item = find_by_date(oi_hist, date)
+        if oi_item:
+            oi_val = oi_item.get("c") or oi_item.get("close") or oi_item.get("openInterest")
+            # OI change: сравниваем с предыдущим днём
+            if i > 0:
+                prev_date = prices[i-1]["date"]
+                prev_oi_item = find_by_date(oi_hist, prev_date)
+                if prev_oi_item:
+                    prev_oi = prev_oi_item.get("c") or prev_oi_item.get("close") or prev_oi_item.get("openInterest")
+                    if prev_oi and oi_val:
+                        try:
+                            oi_change_pct = ((float(oi_val) - float(prev_oi)) / float(prev_oi)) * 100
+                        except (ValueError, TypeError, ZeroDivisionError):
+                            pass
+
+        # Funding Rate history
+        fr_item = find_by_date(fr_hist, date)
+        if fr_item:
+            fr_val = fr_item.get("c") or fr_item.get("close") or fr_item.get("fundingRate")
+            if fr_val is not None:
+                try:
+                    fr_val = float(fr_val) * 100  # в проценты
+                except (ValueError, TypeError):
+                    fr_val = None
 
         if fg_hist:
             for fg_item in fg_hist:
@@ -429,8 +502,8 @@ async def run_backtest():
 
 ДАННЫЕ {SYMBOL} на {date}:
 - Цена: ${price:,.0f}, изменение 24ч: {fmt_pct(day_change)}
-- Открытый интерес (OI): нет данных
-- Funding Rate: нет данных
+- Открытый интерес (OI): {fmt_usd(oi_val)} ({fmt_pct(oi_change_pct)} за день)
+- Funding Rate: {fmt_pct(fr_val)}
 - Покупатели/Продавцы (taker): {long_pct or '?'}% / {short_pct or '?'}%
 - Ликвидации {SYMBOL}: лонги {fmt_usd(liq_long)}, шорты {fmt_usd(liq_short)}
 - Fear & Greed: {fg_val or '?'} ({fg_label or '?'}){onchain_block}
@@ -459,9 +532,20 @@ async def run_backtest():
 - RSI > 70 (перекуплен — коррекция вероятна)
 - MACD < 0 и падает (медвежий импульс)
 
-ВЫЖИДАТЬ только если сигналы явно противоречат друг другу и нет перевеса ни в одну сторону.
+ПРИОРИТЕТ ТРЕНДА (САМОЕ ВАЖНОЕ ПРАВИЛО!):
+Технический тренд ВАЖНЕЕ сентимента. Страх и SOPR < 1 — это НЕ автоматический сигнал покупки!
+- Если MACD < 0 И death cross (SMA50 < SMA200) → тренд МЕДВЕЖИЙ. В медвежьем тренде:
+  → Страх (Fear & Greed < 30) = оправдан, это НЕ сигнал покупки
+  → SOPR < 1 = может падать ДАЛЬШЕ, капитуляция не значит дно
+  → Рекомендуй ПРОДАВАТЬ или ВЫЖИДАТЬ, НЕ покупать
+- Если MACD > 0 И golden cross (SMA50 > SMA200) → тренд БЫЧИЙ. В бычьем тренде:
+  → Страх = возможность покупки на откате
+  → SOPR < 1 = локальная коррекция, можно покупать
+
+ВЫЖИДАТЬ если сигналы явно противоречат друг другу и нет перевеса ни в одну сторону.
 
 ВАЖНО: НЕ выбирай "выжидать" по умолчанию! Если есть 2+ совпадающих сигнала — давай направление.
+Но НИКОГДА не рекомендуй "покупать" если MACD отрицательный И death cross — тренд важнее!
 
 ПРАВИЛА ДЛЯ ЗОН (СТРОГО!):
 - Зона покупки ДОЛЖНА ВКЛЮЧАТЬ текущую цену! Формат: от (цена - 1-2%) до (цена + 0.5%)
@@ -475,6 +559,10 @@ async def run_backtest():
 
         # Лог дня
         extras = []
+        if oi_change_pct is not None:
+            extras.append(f"OI:{oi_change_pct:+.1f}%")
+        if fr_val is not None:
+            extras.append(f"FR:{fr_val:+.3f}%")
         if sopr:
             extras.append(f"SOPR:{sopr:.3f}")
         if rsi is not None:
@@ -524,7 +612,7 @@ async def run_backtest():
 
     # ── Итоги ──
     print("=" * 60)
-    print("📊 ИТОГИ БЭКТЕСТА v4 (SOPR + RSI + MACD + Netflow)")
+    print("📊 ИТОГИ БЭКТЕСТА v5 (Trend Priority + OI/FR + On-chain)")
     print("=" * 60)
 
     total = len(results)
