@@ -23,16 +23,11 @@ except (ImportError, AttributeError):
     ANTHROPIC_KEY = None
     HAS_ANTHROPIC = False
 
-# Whale Alert API (бесплатно, 10 req/min, без ключа для public endpoint)
-WHALE_ALERT_BASE = "https://api.whale-alert.io/v1"
-# Примечание: для бесплатного tier нужен API key (регистрация бесплатная)
-# Пока используем публичный endpoint без ключа, если будет 401 — добавим ключ
-try:
-    from config import WHALE_ALERT_KEY
-    HAS_WHALE_ALERT = bool(WHALE_ALERT_KEY)
-except (ImportError, AttributeError):
-    WHALE_ALERT_KEY = None
-    HAS_WHALE_ALERT = False
+# Binance Futures API (бесплатно, без ключа, public endpoints)
+BINANCE_FUTURES_BASE = "https://fapi.binance.com"
+
+# Bybit API v5 (бесплатно, без ключа, public endpoints)
+BYBIT_BASE = "https://api.bybit.com"
 
 # On-chain: бесплатные API (blockchain.info + BGeometrics + DeFiLlama), без ключа
 
@@ -642,78 +637,132 @@ async def fetch_defillama_data() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# WHALE ALERT (бесплатно, 10 req/min, нужен API key — регистрация бесплатная)
+# BINANCE + BYBIT (бесплатно, без ключа — cross-exchange данные)
 # ══════════════════════════════════════════════════════════════════════════════
 
-WHALE_CACHE = {}
-WHALE_CACHE_TTL = 15 * 60  # 15 минут (совпадает с циклом бота)
+CROSS_EXCHANGE_CACHE = {}
+CROSS_EXCHANGE_TTL = 15 * 60  # 15 минут
 
 
-async def fetch_whale_transactions() -> dict:
+async def fetch_binance_top_trader_ls(symbol: str) -> dict:
     """
-    Крупные BTC транзакции за последний час.
-    Whale Alert API: бесплатный tier = 10 req/min, транзакции > $500K.
-    Если нет API ключа — пропускаем.
+    Binance Futures: Top Trader Long/Short Ratio (аккаунты + позиции).
+    Бесплатно, без ключа, public endpoint.
+    Топ-20% трейдеров по балансу — ценный индикатор smart money.
     """
-    if not HAS_WHALE_ALERT:
-        return {}
+    cache_key = f"binance_ls_{symbol}"
+    if cache_key in CROSS_EXCHANGE_CACHE and (time.time() - CROSS_EXCHANGE_CACHE[cache_key]["ts"]) < CROSS_EXCHANGE_TTL:
+        return CROSS_EXCHANGE_CACHE[cache_key]["data"]
 
-    # Проверяем кэш
-    if "whales" in WHALE_CACHE and (time.time() - WHALE_CACHE["whales"]["ts"]) < WHALE_CACHE_TTL:
-        return WHALE_CACHE["whales"]["data"]
+    result = {}
+    pair = f"{symbol}USDT"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            # Top Trader Account Ratio
+            resp_acc = await client.get(
+                f"{BINANCE_FUTURES_BASE}/futures/data/topLongShortAccountRatio",
+                params={"symbol": pair, "period": "1h", "limit": 1}
+            )
+            # Top Trader Position Ratio
+            resp_pos = await client.get(
+                f"{BINANCE_FUTURES_BASE}/futures/data/topLongShortPositionRatio",
+                params={"symbol": pair, "period": "1h", "limit": 1}
+            )
+            # Global Long/Short Account Ratio (все трейдеры)
+            resp_global = await client.get(
+                f"{BINANCE_FUTURES_BASE}/futures/data/globalLongShortAccountRatio",
+                params={"symbol": pair, "period": "1h", "limit": 1}
+            )
+
+            if resp_acc.status_code == 200:
+                data = resp_acc.json()
+                if data and len(data) > 0:
+                    result["bn_top_long_acc"] = round(float(data[0].get("longAccount", 0)) * 100, 1)
+                    result["bn_top_short_acc"] = round(float(data[0].get("shortAccount", 0)) * 100, 1)
+
+            if resp_pos.status_code == 200:
+                data = resp_pos.json()
+                if data and len(data) > 0:
+                    result["bn_top_long_pos"] = round(float(data[0].get("longAccount", 0)) * 100, 1)
+                    result["bn_top_short_pos"] = round(float(data[0].get("shortAccount", 0)) * 100, 1)
+
+            if resp_global.status_code == 200:
+                data = resp_global.json()
+                if data and len(data) > 0:
+                    result["bn_global_long"] = round(float(data[0].get("longAccount", 0)) * 100, 1)
+                    result["bn_global_short"] = round(float(data[0].get("shortAccount", 0)) * 100, 1)
+
+            if result:
+                log.info(f"  📊 Binance {symbol}: TopAcc L/S={result.get('bn_top_long_acc','?')}%/{result.get('bn_top_short_acc','?')}% | Global L/S={result.get('bn_global_long','?')}%/{result.get('bn_global_short','?')}%")
+
+    except Exception as e:
+        log.warning(f"Binance LS {symbol} error: {e}")
+
+    if result:
+        CROSS_EXCHANGE_CACHE[cache_key] = {"data": result, "ts": time.time()}
+    return result
+
+
+async def fetch_bybit_ls(symbol: str) -> dict:
+    """
+    Bybit API v5: Long/Short Ratio (account ratio).
+    Бесплатно, без ключа, public endpoint.
+    """
+    cache_key = f"bybit_ls_{symbol}"
+    if cache_key in CROSS_EXCHANGE_CACHE and (time.time() - CROSS_EXCHANGE_CACHE[cache_key]["ts"]) < CROSS_EXCHANGE_TTL:
+        return CROSS_EXCHANGE_CACHE[cache_key]["data"]
 
     result = {}
     try:
-        # Последний час
-        since = int(time.time()) - 3600
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
-                f"{WHALE_ALERT_BASE}/transactions",
-                params={
-                    "api_key": WHALE_ALERT_KEY,
-                    "min_value": 1000000,  # $1M+ транзакции
-                    "currency": "btc",
-                    "start": since,
-                }
+                f"{BYBIT_BASE}/v5/market/account-ratio",
+                params={"category": "linear", "symbol": f"{symbol}USDT", "period": "1h", "limit": 1}
             )
             if resp.status_code == 200:
                 data = resp.json()
-                txs = data.get("transactions", [])
-                if txs:
-                    # Считаем статистику
-                    to_exchange = 0  # BTC на биржи (медвежий)
-                    from_exchange = 0  # BTC с бирж (бычий)
-                    total_volume = 0
-
-                    for tx in txs:
-                        amount_usd = tx.get("amount_usd", 0)
-                        total_volume += amount_usd
-
-                        # Определяем направление
-                        from_owner = (tx.get("from", {}).get("owner_type", "") or "").lower()
-                        to_owner = (tx.get("to", {}).get("owner_type", "") or "").lower()
-
-                        if to_owner == "exchange" and from_owner != "exchange":
-                            to_exchange += amount_usd
-                        elif from_owner == "exchange" and to_owner != "exchange":
-                            from_exchange += amount_usd
-
-                    result["whale_tx_count"] = len(txs)
-                    result["whale_volume_usd"] = total_volume
-                    result["whale_to_exchange"] = to_exchange
-                    result["whale_from_exchange"] = from_exchange
-
-                    log.info(f"  🐋 Whale Alert: {len(txs)} транзакций, ${total_volume/1e6:.1f}M | на биржи: ${to_exchange/1e6:.1f}M | с бирж: ${from_exchange/1e6:.1f}M")
-            elif resp.status_code == 401:
-                log.warning("  ⚠️ Whale Alert: 401 — нужен API ключ (WHALE_ALERT_KEY)")
-            else:
-                log.warning(f"  ⚠️ Whale Alert: HTTP {resp.status_code}")
+                items = data.get("result", {}).get("list", [])
+                if items:
+                    result["bybit_long"] = round(float(items[0].get("buyRatio", 0)) * 100, 1)
+                    result["bybit_short"] = round(float(items[0].get("sellRatio", 0)) * 100, 1)
+                    log.info(f"  📊 Bybit {symbol}: L/S={result['bybit_long']}%/{result['bybit_short']}%")
 
     except Exception as e:
-        log.warning(f"Whale Alert error: {e}")
+        log.warning(f"Bybit LS {symbol} error: {e}")
 
     if result:
-        WHALE_CACHE["whales"] = {"data": result, "ts": time.time()}
+        CROSS_EXCHANGE_CACHE[cache_key] = {"data": result, "ts": time.time()}
+    return result
+
+
+async def fetch_binance_oi(symbol: str) -> dict:
+    """
+    Binance Futures: Open Interest + OI history (для сравнения с Coinglass).
+    Бесплатно, без ключа.
+    """
+    cache_key = f"binance_oi_{symbol}"
+    if cache_key in CROSS_EXCHANGE_CACHE and (time.time() - CROSS_EXCHANGE_CACHE[cache_key]["ts"]) < CROSS_EXCHANGE_TTL:
+        return CROSS_EXCHANGE_CACHE[cache_key]["data"]
+
+    result = {}
+    pair = f"{symbol}USDT"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{BINANCE_FUTURES_BASE}/fapi/v1/openInterest",
+                params={"symbol": pair}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                oi_qty = float(data.get("openInterest", 0))
+                result["bn_oi_qty"] = oi_qty
+                log.info(f"  📊 Binance OI {symbol}: {oi_qty:,.2f} контрактов")
+
+    except Exception as e:
+        log.warning(f"Binance OI {symbol} error: {e}")
+
+    if result:
+        CROSS_EXCHANGE_CACHE[cache_key] = {"data": result, "ts": time.time()}
     return result
 
 
@@ -888,9 +937,16 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     stablecoin_mcap = coin_data.get("stablecoin_mcap")
     defi_tvl = coin_data.get("defi_tvl")
     defi_tvl_change = coin_data.get("defi_tvl_change")
-    whale_tx_count = coin_data.get("whale_tx_count")
-    whale_to_exchange = coin_data.get("whale_to_exchange")
-    whale_from_exchange = coin_data.get("whale_from_exchange")
+    # Cross-exchange данные (Binance + Bybit)
+    bn_top_long_acc = coin_data.get("bn_top_long_acc")
+    bn_top_short_acc = coin_data.get("bn_top_short_acc")
+    bn_top_long_pos = coin_data.get("bn_top_long_pos")
+    bn_top_short_pos = coin_data.get("bn_top_short_pos")
+    bn_global_long = coin_data.get("bn_global_long")
+    bn_global_short = coin_data.get("bn_global_short")
+    bybit_long = coin_data.get("bybit_long")
+    bybit_short = coin_data.get("bybit_short")
+    bn_oi_qty = coin_data.get("bn_oi_qty")
 
     # Блок on-chain + технических данных для промпта
     onchain_block = ""
@@ -942,14 +998,20 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             tvl_hint = f" ({'+' if defi_tvl_change > 0 else ''}{defi_tvl_change:.1f}% за день)" if defi_tvl_change else ""
             onchain_lines.append(f"- DeFi TVL: ${defi_tvl/1e9:.1f}B{tvl_hint}")
 
-    # Whale Alert блок
-    if whale_tx_count:
-        onchain_lines.append(f"\nКИТЫ (транзакции >$1M за последний час):")
-        onchain_lines.append(f"- Количество: {whale_tx_count} транзакций")
-        if whale_to_exchange:
-            onchain_lines.append(f"- На биржи: ${whale_to_exchange/1e6:.1f}M (готовятся продавать)")
-        if whale_from_exchange:
-            onchain_lines.append(f"- С бирж: ${whale_from_exchange/1e6:.1f}M (холдят — бычий)")
+    # Cross-exchange блок (Binance + Bybit vs Coinglass)
+    if any([bn_top_long_acc, bn_global_long, bybit_long]):
+        onchain_lines.append(f"\nCROSS-EXCHANGE ДАННЫЕ:")
+        if bn_top_long_acc is not None:
+            hint = "топ трейдеры в лонгах" if bn_top_long_acc > 55 else "топ трейдеры в шортах" if bn_top_long_acc < 45 else "баланс"
+            onchain_lines.append(f"- Binance Top Traders (аккаунты): L {bn_top_long_acc}% / S {bn_top_short_acc}% — {hint}")
+        if bn_top_long_pos is not None:
+            onchain_lines.append(f"- Binance Top Traders (позиции): L {bn_top_long_pos}% / S {bn_top_short_pos}%")
+        if bn_global_long is not None:
+            onchain_lines.append(f"- Binance все трейдеры: L {bn_global_long}% / S {bn_global_short}%")
+        if bybit_long is not None:
+            onchain_lines.append(f"- Bybit все трейдеры: L {bybit_long}% / S {bybit_short}%")
+        if bn_oi_qty:
+            onchain_lines.append(f"- Binance OI: {bn_oi_qty:,.2f} контрактов")
 
     if onchain_lines:
         onchain_block = "\n".join(onchain_lines)
@@ -1217,14 +1279,23 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
         if bull_peak_pct > 60:
             bear += 1  # более 60% индикаторов пика сработали
 
-    # 14. Whale Alert: киты на/с бирж
-    whale_to = coin_data.get("whale_to_exchange", 0) or 0
-    whale_from = coin_data.get("whale_from_exchange", 0) or 0
-    if whale_to > 0 or whale_from > 0:
-        if whale_from > whale_to * 1.5:
-            bull += 1  # киты выводят больше чем заводят
-        elif whale_to > whale_from * 1.5:
-            bear += 1  # киты заводят больше чем выводят
+    # 14. Cross-Exchange: Binance Top Traders vs рынок
+    bn_top_long = coin_data.get("bn_top_long_acc")
+    bn_global_l = coin_data.get("bn_global_long")
+    if bn_top_long is not None:
+        if bn_top_long > 55:
+            bull += 1  # топ трейдеры Binance в лонгах (smart money)
+        elif bn_top_long < 45:
+            bear += 1  # топ трейдеры Binance в шортах (smart money)
+
+    # 15. Cross-Exchange consensus: Binance global + Bybit agree
+    bybit_l = coin_data.get("bybit_long")
+    if bn_global_l is not None and bybit_l is not None:
+        avg_long = (bn_global_l + bybit_l) / 2
+        if avg_long > 55:
+            bull += 1  # обе биржи в лонгах
+        elif avg_long < 45:
+            bear += 1  # обе биржи в шортах
 
     # Сила = максимум из бычьих/медвежьих
     strength = max(bull, bear)
@@ -1269,8 +1340,6 @@ async def collect_all():
     # DeFiLlama: стейблкоины + TVL (бесплатно)
     defillama_data = await fetch_defillama_data()
 
-    # Whale Alert: крупные BTC транзакции (бесплатно, если есть ключ)
-    whale_data = await fetch_whale_transactions()
 
     # Общие данные
     fg_data = await fetch_fear_greed()
@@ -1337,6 +1406,13 @@ async def collect_all():
             # On-chain данные (бесплатно, без ключа)
             gn_data = await fetch_onchain_data(symbol)
 
+            # Cross-exchange данные: Binance + Bybit (бесплатно, без ключа)
+            bn_ls_data, bybit_ls_data, bn_oi_data = await asyncio.gather(
+                fetch_binance_top_trader_ls(symbol),
+                fetch_bybit_ls(symbol),
+                fetch_binance_oi(symbol),
+            )
+
             # Объединяем все данные
             coin_data = {
                 **price_data,
@@ -1348,7 +1424,9 @@ async def collect_all():
                 **gn_data,
                 **cg_indicators,      # Bull Market Peak, AHR999, Bubble, ETF
                 **defillama_data,     # Stablecoin mcap, DeFi TVL
-                **(whale_data if symbol == "BTC" else {}),  # Whale Alert только для BTC
+                **bn_ls_data,         # Binance Top Trader L/S + Global L/S
+                **bybit_ls_data,      # Bybit L/S ratio
+                **bn_oi_data,         # Binance OI
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -1392,10 +1470,13 @@ async def collect_all():
                 "sma50": fmt_price(coin_data.get("sma50")),
                 "sma200": fmt_price(coin_data.get("sma200")),
                 "exchange_flow": "—",
-                "whale_tx_count": str(coin_data.get("whale_tx_count", "—")),
-                "whale_volume_usd": fmt_usd(coin_data.get("whale_volume_usd")) if coin_data.get("whale_volume_usd") else "—",
-                "whale_to_exchange": fmt_usd(coin_data.get("whale_to_exchange")) if coin_data.get("whale_to_exchange") else "—",
-                "whale_from_exchange": fmt_usd(coin_data.get("whale_from_exchange")) if coin_data.get("whale_from_exchange") else "—",
+                "bn_top_long_acc": f"{coin_data.get('bn_top_long_acc', '—')}%" if coin_data.get("bn_top_long_acc") is not None else "—",
+                "bn_top_short_acc": f"{coin_data.get('bn_top_short_acc', '—')}%" if coin_data.get("bn_top_short_acc") is not None else "—",
+                "bn_global_long": f"{coin_data.get('bn_global_long', '—')}%" if coin_data.get("bn_global_long") is not None else "—",
+                "bn_global_short": f"{coin_data.get('bn_global_short', '—')}%" if coin_data.get("bn_global_short") is not None else "—",
+                "bybit_long": f"{coin_data.get('bybit_long', '—')}%" if coin_data.get("bybit_long") is not None else "—",
+                "bybit_short": f"{coin_data.get('bybit_short', '—')}%" if coin_data.get("bybit_short") is not None else "—",
+                "bn_oi_qty": f"{coin_data['bn_oi_qty']:,.2f}" if coin_data.get("bn_oi_qty") else "—",
                 "stablecoin_mcap": fmt_usd(coin_data.get("stablecoin_mcap")) if coin_data.get("stablecoin_mcap") else "—",
                 "defi_tvl": fmt_usd(coin_data.get("defi_tvl")) if coin_data.get("defi_tvl") else "—",
                 "defi_tvl_change": fmt_pct(coin_data.get("defi_tvl_change")),

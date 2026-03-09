@@ -12,7 +12,7 @@ SUPABASE_URL      = os.getenv("SUPABASE_URL",      "")
 SUPABASE_KEY      = os.getenv("SUPABASE_KEY",      "")
 COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY",  "")
 ANTHROPIC_KEY     = os.getenv("ANTHROPIC_KEY",      "")
-WHALE_ALERT_KEY   = os.getenv("WHALE_ALERT_KEY",   "")  # Опционально — бесплатный tier
+# Binance + Bybit: бесплатные public API, ключ НЕ нужен
 # On-chain: бесплатные API (blockchain.info + BGeometrics + DeFiLlama), ключ НЕ нужен
 
 # Проверка при старте
