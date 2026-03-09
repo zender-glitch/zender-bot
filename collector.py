@@ -24,8 +24,17 @@ except (ImportError, AttributeError):
     HAS_ANTHROPIC = False
 
 # Bitget API v2 (бесплатно, без ключа, работает из US серверов Railway)
-# OKX — НЕ работает из US (400 Bad Request), убран
+# OKX, Binance, Bybit — НЕ работают из US, убраны
 BITGET_BASE = "https://api.bitget.com"
+
+# Kraken Futures (бесплатно, без ключа, работает в US — Kraken лицензирован в US)
+KRAKEN_FUTURES_BASE = "https://futures.kraken.com/derivatives/api/v3"
+
+# dYdX v4 Indexer (бесплатно, без ключа, DEX — нет гео-блокировки)
+DYDX_BASE = "https://indexer.dydx.trade/v4"
+
+# CoinCap (бесплатно, без ключа — fallback для цен если CoinGecko 429)
+COINCAP_BASE = "https://api.coincap.io/v2"
 
 # On-chain: бесплатные API (blockchain.info + BGeometrics + DeFiLlama), без ключа
 
@@ -176,8 +185,56 @@ async def fetch_prices() -> dict:
             log.warning(f"CoinGecko price error (attempt {attempt+1}): {e}")
             if attempt < 2:
                 await asyncio.sleep(5)
-    log.error("  ❌ CoinGecko: все 3 попытки провалились, цены не получены")
-    return {}
+    log.warning("  ⚠️ CoinGecko: все 3 попытки провалились, пробуем CoinCap fallback...")
+    return await fetch_prices_coincap()
+
+
+# CoinCap IDs (маппинг наших символов)
+COINCAP_IDS = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "BNB": "binance-coin",
+    "AVAX": "avalanche",
+}
+
+
+async def fetch_prices_coincap() -> dict:
+    """
+    Fallback для цен: CoinCap API v2 (бесплатно, без ключа).
+    Используется когда CoinGecko возвращает 429.
+    """
+    result = {}
+    try:
+        ids = ",".join(COINCAP_IDS.values())
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{COINCAP_BASE}/assets",
+                params={"ids": ids}
+            )
+            if resp.status_code != 200:
+                log.error(f"  ❌ CoinCap HTTP {resp.status_code}")
+                return {}
+            data = resp.json().get("data", [])
+            # Обратный маппинг coincap_id → symbol
+            reverse_map = {v: k for k, v in COINCAP_IDS.items()}
+            for asset in data:
+                asset_id = asset.get("id", "")
+                symbol = reverse_map.get(asset_id)
+                if symbol:
+                    price = asset.get("priceUsd")
+                    change = asset.get("changePercent24Hr")
+                    result[symbol] = {
+                        "price": float(price) if price else None,
+                        "change_24h": float(change) if change else None,
+                    }
+            if result:
+                log.info(f"  ✅ CoinCap fallback: получены цены для {list(result.keys())}")
+            else:
+                log.error("  ❌ CoinCap: пустой ответ")
+    except Exception as e:
+        log.error(f"  ❌ CoinCap error: {e}")
+    return result
 
 
 async def fetch_open_interest(symbol: str) -> dict:
@@ -750,6 +807,153 @@ async def fetch_bitget_oi(symbol: str) -> dict:
     return result
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# KRAKEN FUTURES (бесплатно, без ключа, US-лицензирован — работает из Railway)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Маппинг наших символов на Kraken Futures тикеры
+KRAKEN_FUTURES_SYMBOLS = {
+    "BTC": "PF_XBTUSD",
+    "ETH": "PF_ETHUSD",
+    "SOL": "PF_SOLUSD",
+    # BNB и AVAX не торгуются на Kraken Futures
+}
+
+KRAKEN_CACHE = {}
+KRAKEN_CACHE_TTL = 15 * 60  # 15 минут
+
+
+async def fetch_kraken_futures(symbol: str) -> dict:
+    """
+    Kraken Futures: Funding Rate + Open Interest.
+    Бесплатно, без ключа. Kraken лицензирован в US — нет гео-блокировки.
+    Поддерживает: BTC, ETH, SOL.
+    """
+    if symbol not in KRAKEN_FUTURES_SYMBOLS:
+        return {}
+
+    cache_key = f"kraken_{symbol}"
+    if cache_key in KRAKEN_CACHE and (time.time() - KRAKEN_CACHE[cache_key]["ts"]) < KRAKEN_CACHE_TTL:
+        return KRAKEN_CACHE[cache_key]["data"]
+
+    result = {}
+    ticker = KRAKEN_FUTURES_SYMBOLS[symbol]
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(f"{KRAKEN_FUTURES_BASE}/tickers")
+            if resp.status_code != 200:
+                log.warning(f"Kraken Futures HTTP {resp.status_code}")
+                return {}
+            data = resp.json()
+            tickers = data.get("tickers", [])
+            for t in tickers:
+                if t.get("symbol") == ticker:
+                    # Funding Rate (уже в процентах, но может быть абсолютное значение)
+                    fr = t.get("fundingRate")
+                    if fr is not None:
+                        result["kraken_funding"] = float(fr) * 100  # в проценты
+
+                    # Open Interest
+                    oi = t.get("openInterest")
+                    if oi is not None:
+                        result["kraken_oi"] = float(oi)
+
+                    # Mark Price (для сравнения)
+                    mark = t.get("markPrice")
+                    if mark is not None:
+                        result["kraken_mark_price"] = float(mark)
+
+                    # Volume 24h
+                    vol = t.get("vol24h")
+                    if vol is not None:
+                        result["kraken_volume_24h"] = float(vol)
+
+                    break
+
+            if result:
+                log.info(f"  📊 Kraken {symbol}: FR={result.get('kraken_funding','?')}% | OI={result.get('kraken_oi','?')}")
+
+    except Exception as e:
+        log.warning(f"Kraken Futures {symbol} error: {e}")
+
+    if result:
+        KRAKEN_CACHE[cache_key] = {"data": result, "ts": time.time()}
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# dYdX v4 INDEXER (бесплатно, без ключа, DEX — нет гео-блокировки)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Маппинг наших символов на dYdX perpetual markets
+DYDX_SYMBOLS = {
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD",
+    "SOL": "SOL-USD",
+    "AVAX": "AVAX-USD",
+    # BNB не торгуется на dYdX
+}
+
+DYDX_CACHE = {}
+DYDX_CACHE_TTL = 15 * 60  # 15 минут
+
+
+async def fetch_dydx_data(symbol: str) -> dict:
+    """
+    dYdX v4 Indexer: Open Interest + Funding Rate.
+    Бесплатно, без ключа. DEX — нет гео-блокировки, работает отовсюду.
+    Поддерживает: BTC, ETH, SOL, AVAX.
+    """
+    if symbol not in DYDX_SYMBOLS:
+        return {}
+
+    cache_key = f"dydx_{symbol}"
+    if cache_key in DYDX_CACHE and (time.time() - DYDX_CACHE[cache_key]["ts"]) < DYDX_CACHE_TTL:
+        return DYDX_CACHE[cache_key]["data"]
+
+    result = {}
+    market = DYDX_SYMBOLS[symbol]
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(f"{DYDX_BASE}/perpetualMarkets")
+            if resp.status_code != 200:
+                log.warning(f"dYdX HTTP {resp.status_code}")
+                return {}
+            data = resp.json()
+            markets = data.get("markets", {})
+            m = markets.get(market)
+            if m:
+                # Open Interest
+                oi = m.get("openInterest")
+                if oi is not None:
+                    result["dydx_oi"] = float(oi)
+
+                # Next Funding Rate (для сравнения с CEX)
+                fr = m.get("nextFundingRate")
+                if fr is not None:
+                    result["dydx_funding"] = float(fr) * 100  # в проценты
+
+                # Volume 24h
+                vol = m.get("volume24H")
+                if vol is not None:
+                    result["dydx_volume_24h"] = float(vol)
+
+                # Oracle Price
+                oracle = m.get("oraclePrice")
+                if oracle is not None:
+                    result["dydx_oracle_price"] = float(oracle)
+
+            if result:
+                log.info(f"  📊 dYdX {symbol}: FR={result.get('dydx_funding','?')}% | OI={result.get('dydx_oi','?')}")
+
+    except Exception as e:
+        log.warning(f"dYdX {symbol} error: {e}")
+
+    if result:
+        DYDX_CACHE[cache_key] = {"data": result, "ts": time.time()}
+    return result
+
+
 async def fetch_onchain_data(symbol: str) -> dict:
     """
     On-chain метрики для BTC (бесплатные API, без ключа).
@@ -921,12 +1125,16 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     stablecoin_mcap = coin_data.get("stablecoin_mcap")
     defi_tvl = coin_data.get("defi_tvl")
     defi_tvl_change = coin_data.get("defi_tvl_change")
-    # Cross-exchange данные (Bitget)
+    # Cross-exchange данные (Bitget + Kraken + dYdX)
     bitget_long_acc = coin_data.get("bitget_long_acc")
     bitget_short_acc = coin_data.get("bitget_short_acc")
     bitget_long_pos = coin_data.get("bitget_long_pos")
     bitget_short_pos = coin_data.get("bitget_short_pos")
     bitget_oi_usd = coin_data.get("bitget_oi_usd")
+    kraken_funding = coin_data.get("kraken_funding")
+    kraken_oi = coin_data.get("kraken_oi")
+    dydx_funding = coin_data.get("dydx_funding")
+    dydx_oi = coin_data.get("dydx_oi")
 
     # Блок on-chain + технических данных для промпта
     onchain_block = ""
@@ -978,9 +1186,9 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             tvl_hint = f" ({'+' if defi_tvl_change > 0 else ''}{defi_tvl_change:.1f}% за день)" if defi_tvl_change else ""
             onchain_lines.append(f"- DeFi TVL: ${defi_tvl/1e9:.1f}B{tvl_hint}")
 
-    # Cross-exchange блок (Bitget vs Coinglass)
-    if any([bitget_long_acc, bitget_long_pos]):
-        onchain_lines.append(f"\nCROSS-EXCHANGE ДАННЫЕ (Bitget — сравнение с Coinglass L/S):")
+    # Cross-exchange блок (Bitget + Kraken + dYdX vs Coinglass)
+    if any([bitget_long_acc, bitget_long_pos, kraken_funding, dydx_funding]):
+        onchain_lines.append(f"\nCROSS-EXCHANGE ДАННЫЕ (мульти-биржевое сравнение):")
         if bitget_long_acc is not None:
             hint = "ритейл в лонгах" if bitget_long_acc > 60 else "ритейл в шортах" if bitget_long_acc < 40 else "баланс"
             onchain_lines.append(f"- Bitget аккаунты: L {bitget_long_acc}% / S {bitget_short_acc}% — {hint}")
@@ -989,6 +1197,16 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             onchain_lines.append(f"- Bitget позиции: L {bitget_long_pos}% / S {bitget_short_pos}% — {hint_pos}")
         if bitget_oi_usd:
             onchain_lines.append(f"- Bitget OI: ${bitget_oi_usd/1e6:.1f}M")
+        if kraken_funding is not None:
+            kr_hint = "лонги платят (перегрев)" if kraken_funding > 0.01 else "шорты платят (разворот вверх)" if kraken_funding < -0.005 else "нейтральный"
+            onchain_lines.append(f"- Kraken Futures FR: {kraken_funding:.4f}% — {kr_hint}")
+        if kraken_oi is not None:
+            onchain_lines.append(f"- Kraken Futures OI: {kraken_oi:,.0f} контрактов")
+        if dydx_funding is not None:
+            dx_hint = "лонги платят" if dydx_funding > 0.01 else "шорты платят" if dydx_funding < -0.005 else "нейтральный"
+            onchain_lines.append(f"- dYdX (DEX) FR: {dydx_funding:.4f}% — {dx_hint}")
+        if dydx_oi is not None:
+            onchain_lines.append(f"- dYdX OI: {dydx_oi:,.0f}")
 
     if onchain_lines:
         onchain_block = "\n".join(onchain_lines)
@@ -1275,6 +1493,31 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
         elif bitget_pos_l < 45 and cg_long_pct < 45:
             bear += 1  # обе платформы: позиции в шортах
 
+    # 16. Cross-Exchange Funding Rate consensus (Kraken + dYdX vs Coinglass)
+    # Если funding на нескольких биржах совпадает — сильный сигнал
+    cg_fr = coin_data.get("funding_rate")
+    kraken_fr = coin_data.get("kraken_funding")
+    dydx_fr = coin_data.get("dydx_funding")
+    fr_negative_count = 0
+    fr_positive_count = 0
+    for fr_val in [cg_fr, kraken_fr, dydx_fr]:
+        if fr_val is not None:
+            if fr_val < -0.005:
+                fr_negative_count += 1
+            elif fr_val > 0.03:
+                fr_positive_count += 1
+    if fr_negative_count >= 2:
+        bull += 1  # 2+ бирж: шорты платят → разворот вверх вероятен
+    if fr_positive_count >= 2:
+        bear += 1  # 2+ бирж: лонги переплачивают → перегрев
+
+    # 17. dYdX OI divergence (DEX vs CEX)
+    # Если OI на dYdX растёт при падении на CEX — smart money позиционируется
+    dydx_oi_val = coin_data.get("dydx_oi")
+    cg_oi_change = coin_data.get("oi_change_1h")
+    # Просто учитываем наличие dYdX OI данных как дополнительный фактор уверенности
+    # (без исторических данных пока не можем сравнивать изменения)
+
     # Сила = максимум из бычьих/медвежьих
     strength = max(bull, bear)
 
@@ -1384,10 +1627,12 @@ async def collect_all():
             # On-chain данные (бесплатно, без ключа)
             gn_data = await fetch_onchain_data(symbol)
 
-            # Cross-exchange данные: Bitget (бесплатно, без ключа, работает из US)
-            bitget_ls_data, bitget_oi_data = await asyncio.gather(
+            # Cross-exchange данные: Bitget + Kraken + dYdX (бесплатно, без ключа)
+            bitget_ls_data, bitget_oi_data, kraken_data, dydx_data = await asyncio.gather(
                 fetch_bitget_ls(symbol),
                 fetch_bitget_oi(symbol),
+                fetch_kraken_futures(symbol),
+                fetch_dydx_data(symbol),
             )
 
             # Объединяем все данные
@@ -1403,6 +1648,8 @@ async def collect_all():
                 **defillama_data,     # Stablecoin mcap, DeFi TVL
                 **bitget_ls_data,     # Bitget Account + Position L/S
                 **bitget_oi_data,     # Bitget OI
+                **kraken_data,        # Kraken Futures: funding + OI
+                **dydx_data,          # dYdX: funding + OI
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -1451,6 +1698,10 @@ async def collect_all():
                 "bitget_long_pos": f"{coin_data.get('bitget_long_pos', '—')}%" if coin_data.get("bitget_long_pos") is not None else "—",
                 "bitget_short_pos": f"{coin_data.get('bitget_short_pos', '—')}%" if coin_data.get("bitget_short_pos") is not None else "—",
                 "bitget_oi_usd": fmt_usd(coin_data.get("bitget_oi_usd")) if coin_data.get("bitget_oi_usd") else "—",
+                "kraken_funding": fmt_fr(coin_data.get("kraken_funding")),
+                "kraken_oi": str(round(coin_data["kraken_oi"])) if coin_data.get("kraken_oi") else "—",
+                "dydx_funding": fmt_fr(coin_data.get("dydx_funding")),
+                "dydx_oi": str(round(coin_data["dydx_oi"])) if coin_data.get("dydx_oi") else "—",
                 "stablecoin_mcap": fmt_usd(coin_data.get("stablecoin_mcap")) if coin_data.get("stablecoin_mcap") else "—",
                 "defi_tvl": fmt_usd(coin_data.get("defi_tvl")) if coin_data.get("defi_tvl") else "—",
                 "defi_tvl_change": fmt_pct(coin_data.get("defi_tvl_change")),

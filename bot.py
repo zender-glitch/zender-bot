@@ -397,14 +397,18 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             tvl_arrow = _arrow(defi_tvl_chg)
             lines.append(f"<code>  🏦 DeFi TVL  {defi_tvl_val} {tvl_arrow} {defi_tvl_chg}</code>")
 
-    # ── CROSS-EXCHANGE (Bitget) ──
+    # ── CROSS-EXCHANGE (Bitget + Kraken + dYdX) ──
     bg_long_acc = d.get("bitget_long_acc", "—")
     bg_short_acc = d.get("bitget_short_acc", "—")
     bg_long_pos = d.get("bitget_long_pos", "—")
     bg_short_pos = d.get("bitget_short_pos", "—")
     bg_oi = d.get("bitget_oi_usd", "—")
+    kr_funding = d.get("kraken_funding", "—")
+    kr_oi = d.get("kraken_oi", "—")
+    dx_funding = d.get("dydx_funding", "—")
+    dx_oi = d.get("dydx_oi", "—")
 
-    has_cross = _has(bg_long_acc) or _has(bg_long_pos)
+    has_cross = _has(bg_long_acc) or _has(bg_long_pos) or _has(kr_funding) or _has(dx_funding)
     if has_cross:
         lines.append("")
         lines.append("<b>CROSS-EXCHANGE</b>")
@@ -414,6 +418,14 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             lines.append(f"<code>  🔵 Bitget Pos L {bg_long_pos} / S {bg_short_pos}</code>")
         if _has(bg_oi):
             lines.append(f"<code>  📈 Bitget OI  {bg_oi}</code>")
+        if _has(kr_funding):
+            lines.append(f"<code>  🟠 Kraken FR  {kr_funding}</code>")
+        if _has(kr_oi):
+            lines.append(f"<code>  📈 Kraken OI  {kr_oi}</code>")
+        if _has(dx_funding):
+            lines.append(f"<code>  🟣 dYdX FR    {dx_funding}</code>")
+        if _has(dx_oi):
+            lines.append(f"<code>  📈 dYdX OI    {dx_oi}</code>")
 
     # ══════ ВЕРДИКТ (внизу, после всех метрик) ══════
 
