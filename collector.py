@@ -149,25 +149,35 @@ async def cg_get(path: str, params: dict = None) -> dict | list | None:
 
 async def fetch_prices() -> dict:
     ids = ",".join(COINGECKO_IDS.values())
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                "https://api.coingecko.com/api/v3/simple/price",
-                params={"ids": ids, "vs_currencies": "usd", "include_24hr_change": "true"}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            result = {}
-            for symbol, gecko_id in COINGECKO_IDS.items():
-                if gecko_id in data:
-                    result[symbol] = {
-                        "price": data[gecko_id].get("usd"),
-                        "change_24h": data[gecko_id].get("usd_24h_change"),
-                    }
-            return result
-    except Exception as e:
-        log.warning(f"CoinGecko price error: {e}")
-        return {}
+    # Retry до 3 раз с задержкой (CoinGecko free tier: 429 при частых запросах)
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    "https://api.coingecko.com/api/v3/simple/price",
+                    params={"ids": ids, "vs_currencies": "usd", "include_24hr_change": "true"}
+                )
+                if resp.status_code == 429:
+                    wait = 5 * (attempt + 1)
+                    log.warning(f"  ⚠️ CoinGecko 429 — ждём {wait}с (попытка {attempt+1}/3)")
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                result = {}
+                for symbol, gecko_id in COINGECKO_IDS.items():
+                    if gecko_id in data:
+                        result[symbol] = {
+                            "price": data[gecko_id].get("usd"),
+                            "change_24h": data[gecko_id].get("usd_24h_change"),
+                        }
+                return result
+        except Exception as e:
+            log.warning(f"CoinGecko price error (attempt {attempt+1}): {e}")
+            if attempt < 2:
+                await asyncio.sleep(5)
+    log.error("  ❌ CoinGecko: все 3 попытки провалились, цены не получены")
+    return {}
 
 
 async def fetch_open_interest(symbol: str) -> dict:
