@@ -409,21 +409,20 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         except (ValueError, TypeError):
             pass
 
-    # ── КИТЫ ──
-    whale_tx = d.get("whale_largest_tx_usd", "—")
+    # ── КИТЫ (Exchange Netflow — куда двигают крупные игроки) ──
+    netflow = d.get("exchange_netflow_btc", "—")
     eth_gas = d.get("eth_gas_avg", "—")
-    if _has(whale_tx):
-        lines.append("")
+    if coin == "BTC" and _has(netflow):
         try:
-            wt = float(str(whale_tx).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9").replace("K", "e3"))
-            if wt > 1_000_000:
-                lines.append(f"🐋 Киты: крупнейшая TX ${wt/1e6:.1f}M")
-            elif wt > 1_000:
-                lines.append(f"🐋 Киты: крупнейшая TX ${wt/1e3:.0f}K")
+            nf = float(str(netflow).replace(",", "").replace("+", ""))
+            if nf < -100:
+                lines.append(f"🐋 Киты: выводят с бирж ({nf:,.0f} BTC)")
+            elif nf > 100:
+                lines.append(f"🐋 Киты: заводят на биржи (+{nf:,.0f} BTC)")
             else:
-                lines.append(f"🐋 Киты: крупнейшая TX ${wt:,.0f}")
+                lines.append(f"🐋 Киты: без движения ({nf:+,.0f} BTC)")
         except (ValueError, TypeError):
-            lines.append(f"🐋 Киты: крупнейшая TX {whale_tx}")
+            pass
     # ETH Gas (только для ETH)
     if coin == "ETH" and _has(eth_gas):
         try:

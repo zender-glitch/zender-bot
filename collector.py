@@ -49,8 +49,8 @@ except (ImportError, AttributeError):
 
 ETHERSCAN_BASE = "https://api.etherscan.io/api"
 
-# Blockchair (бесплатно, без ключа, 30 req/min) — крупные транзакции (киты)
-BLOCKCHAIR_BASE = "https://api.blockchair.com"
+# Blockchair — УБРАН (данные без контекста: кто, куда, зачем — бесполезно)
+# Вместо этого используем BGeometrics Exchange Netflow (уже подключён)
 
 from database import db
 
@@ -1384,78 +1384,6 @@ async def fetch_etherscan_data() -> dict:
     return result
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# BLOCKCHAIR — Крупные транзакции (КИТЫ) (бесплатно, без ключа, 30 req/min)
-# ══════════════════════════════════════════════════════════════════════════════
-
-BLOCKCHAIR_CACHE = {}  # {key: {"data": ..., "ts": time.time()}}
-BLOCKCHAIR_CACHE_TTL = 15 * 60  # 15 минут
-
-# Маппинг наших монет → Blockchair chain names
-BLOCKCHAIR_CHAINS = {
-    "BTC": "bitcoin",
-    "ETH": "ethereum",
-}
-
-async def fetch_whale_data(symbol: str) -> dict:
-    """
-    Крупнейшие транзакции за 24ч через Blockchair.
-    Возвращает: кол-во крупных транзакций, самая большая транзакция в USD.
-    Только BTC и ETH (Blockchair бесплатно поддерживает эти 2 основные).
-    """
-    chain = BLOCKCHAIR_CHAINS.get(symbol)
-    if not chain:
-        return {}
-
-    cache_key = f"whale_{symbol}"
-    if cache_key in BLOCKCHAIR_CACHE and (time.time() - BLOCKCHAIR_CACHE[cache_key]["ts"]) < BLOCKCHAIR_CACHE_TTL:
-        return BLOCKCHAIR_CACHE[cache_key]["data"]
-
-    result = {}
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            # Получаем статистику блокчейна (включает largest_transaction_24h)
-            resp = await client.get(f"{BLOCKCHAIR_BASE}/{chain}/stats")
-            if resp.status_code == 200:
-                data = resp.json()
-                stats = data.get("data", {})
-
-                # Крупнейшая транзакция за 24ч
-                largest_tx = stats.get("largest_transaction_24h")
-                if largest_tx:
-                    largest_hash = largest_tx.get("hash", "")
-                    largest_value = largest_tx.get("value_usd")
-                    if largest_value is not None:
-                        result["whale_largest_tx_usd"] = float(largest_value)
-                        log.info(f"  🐋 {symbol} крупнейшая TX 24ч: ${float(largest_value):,.0f}")
-
-                # Общий объём транзакций за 24ч
-                tx_24h = stats.get("transactions_24h")
-                if tx_24h is not None:
-                    result["whale_tx_count_24h"] = int(tx_24h)
-
-                # Средняя транзакция
-                avg_tx = stats.get("average_transaction_fee_usd_24h")
-                if avg_tx is not None:
-                    result["whale_avg_fee_usd"] = float(avg_tx)
-
-                # Mempool (только для BTC)
-                mempool = stats.get("mempool_transactions")
-                if mempool is not None:
-                    result["whale_mempool"] = int(mempool)
-
-                # Сложность
-                difficulty = stats.get("difficulty")
-                if difficulty is not None:
-                    result["whale_difficulty"] = float(difficulty)
-
-    except Exception as e:
-        log.warning(f"Blockchair {symbol} error: {e}")
-
-    if result:
-        BLOCKCHAIR_CACHE[cache_key] = {"data": result, "ts": time.time()}
-    return result
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LLM-АНАЛИЗ (Claude API)
@@ -1531,9 +1459,6 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     bid_depth = coin_data.get("bid_depth_usd")
     ask_depth = coin_data.get("ask_depth_usd")
     bid_ask_ratio = coin_data.get("bid_ask_ratio")
-    # Whale данные (Blockchair)
-    whale_largest_tx = coin_data.get("whale_largest_tx_usd")
-    whale_tx_count = coin_data.get("whale_tx_count_24h")
     # ETH Gas (Etherscan)
     eth_gas = coin_data.get("eth_gas_avg")
 
@@ -1621,14 +1546,6 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
         else:
             ob_hint = "баланс покупателей/продавцов"
         onchain_lines.append(f"- Bid/Ask Ratio: {bid_ask_ratio:.1%} — {ob_hint}")
-
-    # Whale данные (Blockchair — крупные транзакции)
-    if whale_largest_tx or whale_tx_count:
-        onchain_lines.append(f"\nКИТЫ (крупные транзакции {symbol}):")
-        if whale_largest_tx:
-            onchain_lines.append(f"- Крупнейшая TX за 24ч: ${whale_largest_tx:,.0f}")
-        if whale_tx_count:
-            onchain_lines.append(f"- Всего транзакций 24ч: {whale_tx_count:,}")
 
     # ETH Gas (Etherscan)
     if eth_gas and symbol == "ETH":
@@ -2110,8 +2027,7 @@ async def collect_all():
                 fetch_kraken_orderbook(symbol),
             )
 
-            # Blockchair: крупные транзакции — киты (BTC, ETH)
-            whale_data = await fetch_whale_data(symbol)
+            # Киты: данные из BGeometrics Exchange Netflow (уже в gn_data)
 
             # Объединяем все данные
             coin_data = {
@@ -2130,7 +2046,6 @@ async def collect_all():
                 **dydx_data,          # dYdX: funding + OI
                 **ob_data,            # Kraken Order Book: bid/ask imbalance
                 **tech_data,          # RSI, MACD, SMA50, SMA200 (для не-BTC монет)
-                **whale_data,         # Blockchair: крупные TX (киты)
                 **etherscan_data,     # Etherscan: ETH gas
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
@@ -2196,8 +2111,6 @@ async def collect_all():
                 "bitcoin_bubble": str(coin_data.get("bitcoin_bubble", "—")),
                 "fear_greed": str(coin_data.get("fear_greed", "—")),
                 "fear_greed_label": coin_data.get("fear_greed_label", "—"),
-                "whale_largest_tx_usd": fmt_usd(coin_data.get("whale_largest_tx_usd")) if coin_data.get("whale_largest_tx_usd") else "—",
-                "whale_tx_count_24h": str(coin_data.get("whale_tx_count_24h", "—")),
                 "eth_gas_avg": str(coin_data.get("eth_gas_avg", "—")),
                 "signal": signal_bar,
                 "label": signal_label,
