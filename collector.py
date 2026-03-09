@@ -63,6 +63,155 @@ COINGECKO_IDS = {
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ТЕХНИЧЕСКИЕ ИНДИКАТОРЫ — расчёт из исторических цен CoinGecko
+# RSI(14), MACD(12,26,9), SMA50, SMA200 — стандартные формулы
+# Для BTC данные приходят из BGeometrics, для остальных монет — считаем сами
+# ══════════════════════════════════════════════════════════════════════════════
+
+TECH_CACHE = {}  # {symbol: {"data": {...}, "ts": time.time()}}
+TECH_CACHE_TTL = 30 * 60  # 30 минут — обновляем каждые 2 цикла бота (4 монеты × 1 req = мизер для CoinGecko)
+
+
+def calc_rsi(prices: list[float], period: int = 14) -> float | None:
+    """RSI(14) — Relative Strength Index. Стандартный Wilder's smoothing."""
+    if len(prices) < period + 1:
+        return None
+    deltas = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+
+    # Первое среднее — простое
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    # Smoothed (Wilder's) — как на TradingView
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 1)
+
+
+def calc_sma(prices: list[float], period: int) -> float | None:
+    """Simple Moving Average."""
+    if len(prices) < period:
+        return None
+    return round(sum(prices[-period:]) / period, 2)
+
+
+def calc_ema(prices: list[float], period: int) -> list[float]:
+    """Exponential Moving Average — возвращает весь массив EMA."""
+    if len(prices) < period:
+        return []
+    multiplier = 2 / (period + 1)
+    ema = [sum(prices[:period]) / period]  # первое значение = SMA
+    for i in range(period, len(prices)):
+        ema.append((prices[i] - ema[-1]) * multiplier + ema[-1])
+    return ema
+
+
+def calc_macd(prices: list[float]) -> tuple[float | None, float | None]:
+    """
+    MACD(12, 26, 9) — стандартные параметры.
+    Возвращает: (macd_line, signal_line)
+    macd > 0 = бычий импульс, < 0 = медвежий
+    """
+    if len(prices) < 35:  # нужно 26 + 9 дней минимум
+        return None, None
+    ema12 = calc_ema(prices, 12)
+    ema26 = calc_ema(prices, 26)
+
+    # MACD line = EMA12 - EMA26 (выравниваем по длине)
+    offset = len(ema12) - len(ema26)
+    macd_line = []
+    for i in range(len(ema26)):
+        macd_line.append(ema12[i + offset] - ema26[i])
+
+    if len(macd_line) < 9:
+        return None, None
+
+    # Signal line = EMA(9) от MACD line
+    signal = calc_ema(macd_line, 9)
+
+    if not signal:
+        return round(macd_line[-1], 2), None
+
+    return round(macd_line[-1], 2), round(signal[-1], 2)
+
+
+async def fetch_tech_indicators(symbol: str) -> dict:
+    """
+    Загружает 200 дней цен из CoinGecko и считает RSI, MACD, SMA50, SMA200.
+    Кэш 4 часа — дневные индикаторы не меняются часто.
+    Для BTC пропускаем — данные приходят из BGeometrics.
+    """
+    if symbol == "BTC":
+        return {}  # BTC получает из BGeometrics
+
+    cache_key = f"tech_{symbol}"
+    if cache_key in TECH_CACHE and (time.time() - TECH_CACHE[cache_key]["ts"]) < TECH_CACHE_TTL:
+        return TECH_CACHE[cache_key]["data"]
+
+    gecko_id = COINGECKO_IDS.get(symbol)
+    if not gecko_id:
+        return {}
+
+    result = {}
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                f"https://api.coingecko.com/api/v3/coins/{gecko_id}/market_chart",
+                params={"vs_currency": "usd", "days": "200", "interval": "daily"}
+            )
+            if resp.status_code == 429:
+                log.warning(f"  ⚠️ CoinGecko 429 при загрузке истории {symbol}")
+                return {}
+            if resp.status_code != 200:
+                log.warning(f"  ⚠️ CoinGecko history {symbol}: HTTP {resp.status_code}")
+                return {}
+
+            data = resp.json()
+            price_points = data.get("prices", [])
+            if len(price_points) < 50:
+                log.warning(f"  ⚠️ Tech {symbol}: мало данных ({len(price_points)} точек)")
+                return {}
+
+            # Извлекаем только цены (без timestamp)
+            closes = [p[1] for p in price_points]
+
+            # Считаем индикаторы
+            rsi = calc_rsi(closes)
+            if rsi is not None:
+                result["rsi"] = rsi
+
+            macd_val, macd_signal = calc_macd(closes)
+            if macd_val is not None:
+                result["macd"] = macd_val
+
+            sma50 = calc_sma(closes, 50)
+            if sma50 is not None:
+                result["sma50"] = sma50
+
+            sma200 = calc_sma(closes, 200)
+            if sma200 is not None:
+                result["sma200"] = sma200
+
+            if result:
+                TECH_CACHE[cache_key] = {"data": result, "ts": time.time()}
+                log.info(f"  📊 Tech {symbol}: RSI={result.get('rsi','?')} | MACD={result.get('macd','?')} | SMA50={result.get('sma50','?')} | SMA200={result.get('sma200','?')}")
+            else:
+                log.warning(f"  ⚠️ Tech {symbol}: не удалось рассчитать индикаторы")
+
+    except Exception as e:
+        log.warning(f"Tech indicators {symbol} error: {e}")
+
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1562,6 +1711,16 @@ async def collect_all():
     # DeFiLlama: стейблкоины + TVL (бесплатно)
     defillama_data = await fetch_defillama_data()
 
+    # Технические индикаторы для не-BTC монет (CoinGecko история, кэш 4ч)
+    # Загружаем заранее с паузами, чтобы не попасть в rate limit CoinGecko
+    for coin in COINS:
+        if coin == "BTC":
+            continue  # BTC получает из BGeometrics
+        cache_key = f"tech_{coin}"
+        if cache_key in TECH_CACHE and (time.time() - TECH_CACHE[cache_key]["ts"]) < TECH_CACHE_TTL:
+            continue  # Кэш актуален
+        await fetch_tech_indicators(coin)
+        await asyncio.sleep(2)  # Пауза между запросами CoinGecko
 
     # Общие данные
     fg_data = await fetch_fear_greed()
@@ -1628,6 +1787,9 @@ async def collect_all():
             # On-chain данные (бесплатно, без ключа)
             gn_data = await fetch_onchain_data(symbol)
 
+            # Технические индикаторы (RSI, MACD, SMA — для не-BTC монет, из CoinGecko истории)
+            tech_data = await fetch_tech_indicators(symbol)
+
             # Cross-exchange данные: Bitget + Kraken + dYdX (бесплатно, без ключа)
             bitget_ls_data, bitget_oi_data, kraken_data, dydx_data = await asyncio.gather(
                 fetch_bitget_ls(symbol),
@@ -1651,6 +1813,7 @@ async def collect_all():
                 **bitget_oi_data,     # Bitget OI
                 **kraken_data,        # Kraken Futures: funding + OI
                 **dydx_data,          # dYdX: funding + OI
+                **tech_data,          # RSI, MACD, SMA50, SMA200 (для не-BTC монет)
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
