@@ -162,12 +162,21 @@ async def fetch_tech_indicators(symbol: str) -> dict:
     result = {}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(
-                f"https://api.coingecko.com/api/v3/coins/{gecko_id}/market_chart",
-                params={"vs_currency": "usd", "days": "200", "interval": "daily"}
-            )
-            if resp.status_code == 429:
-                log.warning(f"  ⚠️ CoinGecko 429 при загрузке истории {symbol}")
+            # Retry до 3 раз при 429 (CoinGecko rate limit)
+            resp = None
+            for attempt in range(3):
+                resp = await client.get(
+                    f"https://api.coingecko.com/api/v3/coins/{gecko_id}/market_chart",
+                    params={"vs_currency": "usd", "days": "200", "interval": "daily"}
+                )
+                if resp.status_code == 429:
+                    wait = 8 * (attempt + 1)  # 8, 16, 24 сек
+                    log.warning(f"  ⚠️ CoinGecko 429 история {symbol} — ждём {wait}с (попытка {attempt+1}/3)")
+                    await asyncio.sleep(wait)
+                    continue
+                break
+            if resp is None or resp.status_code == 429:
+                log.warning(f"  ❌ CoinGecko история {symbol}: 429 после 3 попыток")
                 return {}
             if resp.status_code != 200:
                 log.warning(f"  ⚠️ CoinGecko history {symbol}: HTTP {resp.status_code}")
@@ -1720,7 +1729,7 @@ async def collect_all():
         if cache_key in TECH_CACHE and (time.time() - TECH_CACHE[cache_key]["ts"]) < TECH_CACHE_TTL:
             continue  # Кэш актуален
         await fetch_tech_indicators(coin)
-        await asyncio.sleep(2)  # Пауза между запросами CoinGecko
+        await asyncio.sleep(6)  # Пауза 6с между запросами CoinGecko (free tier: ~10 req/min)
 
     # Общие данные
     fg_data = await fetch_fear_greed()
