@@ -408,7 +408,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     dx_funding = d.get("dydx_funding", "—")
     dx_oi = d.get("dydx_oi", "—")
 
-    has_cross = _has(bg_long_acc) or _has(bg_long_pos) or _has(kr_funding) or _has(dx_funding)
+    has_cross = _has(bg_long_acc) or _has(bg_long_pos) or _has(kr_oi) or _has(dx_funding) or _has(dx_oi)
     if has_cross:
         lines.append("")
         lines.append("<b>CROSS-EXCHANGE</b>")
