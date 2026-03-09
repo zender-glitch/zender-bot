@@ -1389,10 +1389,12 @@ async def fetch_etherscan_data() -> dict:
 # LLM-АНАЛИЗ (Claude API)
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
+async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = None) -> dict:
     """
     Отправляет метрики монеты в Claude API.
-    Возвращает: {llm_text, recommendation, buy_zone, sell_zone}
+    pipeline — результат run_signal_pipeline() (3-слойный анализ).
+    LLM НЕ решает что покупать/продавать — он только формулирует текст
+    на основе уже посчитанного scoring.
     """
     if not HAS_ANTHROPIC:
         return {}
@@ -1557,80 +1559,61 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     if onchain_lines:
         onchain_block = "\n".join(onchain_lines)
 
-    prompt = f"""Ты — опытный крипто-аналитик. Проанализируй данные {symbol} и дай РЕШИТЕЛЬНЫЙ анализ на СЛЕДУЮЩИЕ 24 ЧАСА.
+    # 3-слойный scoring (уже посчитан rule-based)
+    p = pipeline or {}
+    direction_label = p.get("direction_label", "?")
+    state_label = p.get("state_label", "?")
+    quality_label = p.get("quality_label", "?")
+    pre_recommendation = p.get("recommendation", "выжидать")
+    pre_strength = p.get("strength", "слабо")
+    pre_trap = p.get("trap", "нет")
+    pre_horizon = p.get("horizon", "1-2 дня")
+    scoring_factors = p.get("factors", [])
+    scoring_conflicts = p.get("conflicts", [])
+    dir_factors_bull = p.get("dir_factors_bull", [])
+    dir_factors_bear = p.get("dir_factors_bear", [])
 
-ДАННЫЕ {symbol} ПРЯМО СЕЙЧАС:
+    factors_text = ""
+    if dir_factors_bull:
+        factors_text += f"\nБычьи факторы: {', '.join(dir_factors_bull)}"
+    if dir_factors_bear:
+        factors_text += f"\nМедвежьи факторы: {', '.join(dir_factors_bear)}"
+    if scoring_factors:
+        factors_text += f"\nПодтверждающие: {', '.join(scoring_factors)}"
+    if scoring_conflicts:
+        factors_text += f"\nКонфликты: {', '.join(scoring_conflicts)}"
+
+    prompt = f"""Ты — копирайтер крипто-терминала. Тебе УЖЕ ПОСЧИТАН анализ алгоритмом.
+Твоя задача — ТОЛЬКО сформулировать текст для пользователя. НЕ ПЕРЕСЧИТЫВАЙ анализ.
+
+{symbol} СЕЙЧАС:
 - Цена: ${price}, изменение 24ч: {safe_pct(change)}
-- Открытый интерес (OI): {safe_usd(oi)} ({safe_pct(oi_change)} за 1ч)
 - Funding Rate: {safe_pct(fr)}
-- Покупатели/Продавцы (taker): {long_pct or '?'}% / {short_pct or '?'}%
-- Ликвидации {symbol} (1ч): лонги {safe_usd(liq_long)}, шорты {safe_usd(liq_short)}
-- Ликвидации РЫНОК (1ч): лонги {safe_usd(mkt_liq_long)}, шорты {safe_usd(mkt_liq_short)}
+- Покупатели/Продавцы: {long_pct or '?'}% / {short_pct or '?'}%
 - Fear & Greed: {fg or '?'} ({fg_label or '?'}){onchain_block}
 
-ПРАВИЛА ОЦЕНКИ (следуй им строго):
+АЛГОРИТМ УЖЕ РЕШИЛ (НЕ МЕНЯЙ ЭТО):
+- НАПРАВЛЕНИЕ: {direction_label}
+- СОСТОЯНИЕ РЫНКА: {state_label}
+- КАЧЕСТВО СЕТАПА: {quality_label}
+- РЕКОМЕНДАЦИЯ: {pre_recommendation}
+- СИЛА: {pre_strength}
+- ЛОВУШКА: {pre_trap}
+- ГОРИЗОНТ: {pre_horizon}{factors_text}
 
-ПОКУПАТЬ если 2+ условий совпадают:
-- Покупатели > 52% (быки доминируют)
-- OI растёт > +0.5% за 1ч (новые деньги заходят)
-- Funding Rate отрицательный (шорты переплачивают — short squeeze вероятен)
-- Fear & Greed < 25 (экстремальный страх — контр-сигнал, рынок перепродан)
-- Ликвидации шортов > ликвидаций лонгов в 2+ раза
-- Нетто поток бирж отрицательный (BTC выводят — холдят — бычий)
-- SOPR < 1 (капитуляция — дно может быть близко)
-- RSI < 30 (перепродан — разворот вверх вероятен)
-- Order Book: Bid/Ask Ratio > 55% (покупатели давят в стакане)
-- Cross-exchange: Funding Rate отрицательный на 2+ биржах (consensus short squeeze)
+ТВОЯ ЗАДАЧА — написать ТОЛЬКО:
+1. ЧТО_ПРОИСХОДИТ — короткое объяснение простым языком (до 80 символов)
+2. ВХОД / СТОП / ЦЕЛЬ — конкретные цены
 
-ПРОДАВАТЬ если 2+ условий совпадают:
-- Продавцы > 52% (медведи доминируют)
-- OI падает < -0.5% за 1ч (деньги уходят)
-- Funding Rate > +0.05% (лонги переплачивают — рынок перегрет)
-- Fear & Greed > 75 (сильная жадность)
-- Ликвидации лонгов > ликвидаций шортов в 2+ раза
-- Нетто поток бирж положительный (BTC заводят на биржи — медвежий)
-- SOPR > 1.05 (массово фиксируют прибыль)
-- RSI > 70 (перекуплен)
-- Order Book: Bid/Ask Ratio < 45% (продавцы давят в стакане)
-- Cross-exchange: Funding Rate положительный на 2+ биржах (consensus перегрев)
+ПРАВИЛА:
+- ЧТО_ПРОИСХОДИТ: объясни ПОЧЕМУ такой сигнал, простым языком, БЕЗ терминов (RSI, MACD, SOPR, Bid/Ask — ЗАПРЕЩЕНЫ)
+- ВХОД: текущая цена или чуть ниже для покупки / чуть выше для продажи
+- СТОП: 1-2% от входа
+- ЦЕЛЬ: 2-4% от входа
+- Без ** звёздочек и markdown
 
-ДЕТЕКЦИЯ ОТСКОКОВ (КРИТИЧЕСКИ ВАЖНО!):
-Даже в медвежьем тренде (SMA50 < SMA200, MACD < 0) бывают ОТСКОКИ на 3-6%.
-Рекомендуй ПОКУПАТЬ на отскок если ВСЕ условия совпадают:
-- RSI < 30 (перепродан)
-- Изменение 24ч > -3% (сильное падение сегодня)
-- Fear & Greed < 30 (экстремальный страх)
-- Funding Rate отрицательный или нейтральный
-- Order Book показывает покупателей (Bid/Ask > 55%)
-Это краткосрочная покупка на отскок, а не разворот тренда!
-
-ТРЕНД КАК КОНТЕКСТ (не абсолютное правило):
-- Тренд вниз (SMA50 < SMA200) + MACD < 0 = медвежий тренд — общий BIAS на продажу
-- Но в медвежьем тренде случаются отскоки на 3-8% после сильных падений
-- Тренд вверх (SMA50 > SMA200) + MACD > 0 = бычий тренд — общий BIAS на покупку
-- Но в бычьем тренде случаются коррекции на 3-8% после сильных ростов
-
-ВЫЖИДАТЬ если:
-- Сигналы 50/50, нет перевеса
-- RSI в зоне 40-60, MACD около 0, нет экстремумов
-
-ВАЖНО: Учитывай ВСЕ данные включая Order Book и Cross-Exchange! Стакан и мульти-биржевые данные — сильные сигналы.
-
-ПРАВИЛА ДЛЯ УРОВНЕЙ (СТРОГО!):
-- ВХОД: конкретная цена входа (текущая или чуть ниже для покупки, чуть выше для продажи)
-- СТОП: стоп-лосс (1-2% от входа в противоположную сторону)
-- ЦЕЛЬ: тейк-профит (2-4% от входа в сторону рекомендации)
-
-ПРАВИЛА ДЛЯ ЛОВУШКИ:
-- "шорты в ловушке" если: Funding Rate отрицательный + ликвидации шортов рядом + покупатели давят в стакане
-- "лонги в ловушке" если: Funding Rate сильно положительный + ликвидации лонгов рядом + продавцы давят
-- "нет" если нет явных признаков ловушки
-
-ОТВЕТЬ СТРОГО В ФОРМАТЕ (каждая строка с новой строки, без лишнего, без ** звёздочек и markdown):
-ЧТО_ПРОИСХОДИТ: [МАКСИМУМ 2 предложения, до 120 символов! Простым языком без цифр и терминов. Пример: "Рынок откатывается, мелкие продают. Крупные покупатели стоят стеной."]
-ЛОВУШКА: [нет / шорты в ловушке / лонги в ловушке]
-РЕКОМЕНДАЦИЯ: [покупать / продавать / выжидать]
-СИЛА: [сильно / умеренно / слабо]
+ОТВЕТЬ СТРОГО В ФОРМАТЕ:
+ЧТО_ПРОИСХОДИТ: [до 80 символов, простым языком]
 ВХОД: [$XXX,XXX]
 СТОП: [$XXX,XXX]
 ЦЕЛЬ: [$XXX,XXX]"""
@@ -1646,7 +1629,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
                 },
                 json={
                     "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 400,
+                    "max_tokens": 200,
                     "temperature": 0,
                     "messages": [{"role": "user", "content": prompt}],
                 }
@@ -1658,7 +1641,8 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             data = resp.json()
             text = data["content"][0]["text"].strip()
 
-            # Парсим ответ (гибкий парсинг — новый формат v8)
+            # Парсим ответ LLM (только what_happening + entry/stop/target)
+            # Recommendation, strength, trap, horizon — из pipeline (rule-based)
             result = {}
             for line in text.split("\n"):
                 clean = line.strip().lstrip("*").lstrip("#").strip()
@@ -1667,16 +1651,10 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 
                 if upper.startswith("ЧТО_ПРОИСХОДИТ:") or upper.startswith("ЧТО ПРОИСХОДИТ:"):
                     if val:
-                        result["what_happening"] = val
-                elif upper.startswith("ЛОВУШКА:"):
-                    if val and val.lower() != "нет":
-                        result["trap"] = val
-                elif upper.startswith("РЕКОМЕНДАЦИЯ:") or upper.startswith("РЕКОМЕНДАЦИЯ :"):
-                    if val:
-                        result["recommendation"] = val.lower().strip()
-                elif upper.startswith("СИЛА:"):
-                    if val:
-                        result["strength"] = val.lower().strip()
+                        clean_val = val.strip()
+                        if len(clean_val) > 80:
+                            clean_val = clean_val[:77] + "..."
+                        result["what_happening"] = clean_val
                 elif upper.startswith("ВХОД:"):
                     if val:
                         result["entry"] = val.strip()
@@ -1686,100 +1664,107 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
                 elif upper.startswith("ЦЕЛЬ:"):
                     if val:
                         result["target"] = val.strip()
-                # Backward compat: старый формат
-                elif upper.startswith("АНАЛИЗ:") or upper.startswith("АНАЛИЗ :"):
-                    if val and not result.get("what_happening"):
-                        result["what_happening"] = val
-                elif upper.startswith("ЗОНЫ:") or upper.startswith("ЗОНЫ :"):
-                    parts = val.split("|")
-                    if len(parts) >= 2 and not result.get("entry"):
-                        result["buy_zone"] = parts[0].replace("покупка", "").replace("Покупка", "").strip()
-                        result["sell_zone"] = parts[1].replace("продажа", "").replace("Продажа", "").strip()
 
-            # Fallback: ищем ключевые слова в тексте если парсер не нашёл
-            if not result.get("recommendation"):
-                text_lower = text.lower()
-                if "покупать" in text_lower:
-                    result["recommendation"] = "покупать"
-                elif "продавать" in text_lower:
-                    result["recommendation"] = "продавать"
-                elif "выжидать" in text_lower:
-                    result["recommendation"] = "выжидать"
-
+            # Fallback: если what_happening не нашли — берём первую длинную строку
             if not result.get("what_happening") and text:
                 for line in text.split("\n"):
                     clean = line.strip().lstrip("*").strip()
-                    if len(clean) > 20 and not clean.upper().startswith(("РЕКОМЕНДАЦИЯ", "ЗОНЫ", "СИЛА", "ВХОД", "СТОП", "ЦЕЛЬ", "ЛОВУШКА")):
+                    if len(clean) > 20 and not clean.upper().startswith(("ВХОД", "СТОП", "ЦЕЛЬ")):
                         result["what_happening"] = clean.split(":", 1)[1].strip() if ":" in clean else clean
+                        if len(result["what_happening"]) > 80:
+                            result["what_happening"] = result["what_happening"][:77] + "..."
                         break
 
-            # Backward compat: llm_text для старого кода
+            # Pipeline данные — rule-based (НЕ из LLM!)
+            result["recommendation"] = pre_recommendation
+            result["strength"] = pre_strength
+            result["trap"] = pre_trap if pre_trap != "нет" else ""
+            result["horizon"] = pre_horizon
+
+            # Backward compat
             if result.get("what_happening"):
                 result["llm_text"] = result["what_happening"]
 
-            if result.get("llm_text"):
-                log.info(f"  🤖 LLM {symbol}: {result.get('recommendation', '?')}")
+            log.info(f"  🤖 LLM {symbol}: {pre_recommendation} ({pre_strength}) | {state_label}")
             return result
 
     except Exception as e:
         log.warning(f"LLM error {symbol}: {e}")
-        return {}
+        # Даже без LLM — возвращаем pipeline данные
+        return {
+            "recommendation": pre_recommendation,
+            "strength": pre_strength,
+            "trap": pre_trap if pre_trap != "нет" else "",
+            "horizon": pre_horizon,
+            "what_happening": "",
+            "llm_text": "",
+        }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# СИГНАЛ (расчёт силы сигнала)
+# 3-СЛОЙНАЯ АРХИТЕКТУРА СИГНАЛА
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#   RAW DATA → СЛОЙ 1 (направление) → СЛОЙ 2 (состояние) → СЛОЙ 3 (качество)
+#                                                               ↓
+#                                                        LLM FORMATTER
+#                                                               ↓
+#                                                       TELEGRAM OUTPUT
+#
+# Математика считает — LLM только объясняет.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def calculate_signal(coin_data: dict) -> tuple[str, str]:
-    """
-    Расчёт силы сигнала на основе всех метрик.
-    Считаем бычьи и медвежьи сигналы отдельно.
-    Сила = количество совпадающих сигналов.
-    """
-    bull = 0  # бычьи сигналы
-    bear = 0  # медвежьи сигналы
 
-    # 1. Taker Buy/Sell
+def calculate_direction(coin_data: dict) -> dict:
+    """
+    СЛОЙ 1: НАПРАВЛЕНИЕ РЫНКА
+    Отвечает на вопрос: куда сейчас давление — вверх, вниз или боковик?
+
+    Смотрит на: цена, funding, long/short, OI, buy/sell pressure, ликвидации
+    Это индикаторы ПОТОКА ДЕНЕГ — куда двигаются деньги прямо сейчас.
+    """
+    bull = 0
+    bear = 0
+    factors_bull = []
+    factors_bear = []
+
+    # 1. Taker Buy/Sell (давление маркет-ордеров)
     long_pct = coin_data.get("long_pct")
     if long_pct is not None:
-        if long_pct > 52:
+        if long_pct > 55:
             bull += 1
+            factors_bull.append("BUY давление сильное")
+        elif long_pct > 52:
+            bull += 1
+            factors_bull.append("BUY давление выше")
+        elif long_pct < 45:
+            bear += 1
+            factors_bear.append("SELL давление сильное")
         elif long_pct < 48:
             bear += 1
+            factors_bear.append("SELL давление выше")
 
-    # 2. OI change
+    # 2. OI change (поток новых денег)
     oi_change = coin_data.get("oi_change_1h")
     if oi_change is not None:
         if oi_change > 0.5:
-            bull += 1  # новые деньги заходят
+            bull += 1
+            factors_bull.append("новые деньги заходят (OI растёт)")
         elif oi_change < -0.5:
-            bear += 1  # деньги уходят
+            bear += 1
+            factors_bear.append("деньги уходят (OI падает)")
 
-    # 3. Funding Rate
+    # 3. Funding Rate (кто переплачивает)
     fr = coin_data.get("funding_rate")
     if fr is not None:
         if fr < -0.005:
-            bull += 1  # шорты переплачивают → разворот вверх
-        elif fr > 0.05:
-            bear += 1  # лонги переплачивают → перегрев
-
-    # 4. Fear & Greed
-    fg = coin_data.get("fear_greed")
-    if fg is not None:
-        if fg < 30:
-            bull += 1  # сильный страх = возможность покупки
-        elif fg > 75:
-            bear += 1  # жадность = пора фиксировать
-
-    # 5. Цена 24ч
-    change = coin_data.get("change_24h")
-    if change is not None:
-        if change > 3:
             bull += 1
-        elif change < -3:
+            factors_bull.append("шорты переплачивают (short squeeze)")
+        elif fr > 0.05:
             bear += 1
+            factors_bear.append("лонги переплачивают (перегрев)")
 
-    # 6. Ликвидации
+    # 4. Ликвидации (кого выносит)
     liq_long = coin_data.get("liq_long")
     liq_short = coin_data.get("liq_short")
     if liq_long and liq_short:
@@ -1787,131 +1772,468 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
             ll = float(liq_long)
             ls = float(liq_short)
             if ls > ll * 2 and ls > 0:
-                bull += 1  # шортов ликвидируют → рост
+                bull += 1
+                factors_bull.append("шортов ликвидируют")
             elif ll > ls * 2 and ll > 0:
-                bear += 1  # лонгов ликвидируют → падение
+                bear += 1
+                factors_bear.append("лонгов ликвидируют")
         except (ValueError, TypeError):
             pass
 
-    # 7. On-chain: Exchange Netflow (BGeometrics)
-    exchange_netflow = coin_data.get("exchange_netflow_btc")
-    if exchange_netflow is not None:
-        if exchange_netflow < -500:
-            bull += 1  # отток с бирж → холдят → бычий (>500 BTC)
-        elif exchange_netflow > 500:
-            bear += 1  # приток на биржи → готовятся продавать (>500 BTC)
+    # 5. Цена 24ч (краткосрочный импульс)
+    change = coin_data.get("change_24h")
+    if change is not None:
+        if change > 3:
+            bull += 1
+            factors_bull.append("цена растёт")
+        elif change < -3:
+            bear += 1
+            factors_bear.append("цена падает")
 
-    # 8. On-chain: SOPR
-    sopr = coin_data.get("sopr")
-    if sopr is not None:
-        if sopr < 0.98:
-            bull += 1  # капитуляция → дно близко
-        elif sopr > 1.05:
-            bear += 1  # массово фиксируют прибыль
-
-    # 9. RSI (технический индикатор)
-    rsi = coin_data.get("rsi")
-    if rsi is not None:
-        if rsi < 30:
-            bull += 1  # перепродан → разворот вверх
-        elif rsi > 70:
-            bear += 1  # перекуплен → коррекция
-
-    # 10. MACD
+    # 6. MACD (технический импульс)
     macd = coin_data.get("macd")
     if macd is not None:
         if macd > 0:
-            bull += 1  # бычий импульс
+            bull += 1
+            factors_bull.append("бычий импульс (MACD)")
         elif macd < 0:
-            bear += 1  # медвежий импульс
+            bear += 1
+            factors_bear.append("медвежий импульс (MACD)")
 
-    # 11. AHR999 (Coinglass)
-    ahr999 = coin_data.get("ahr999")
-    if ahr999 is not None:
-        if ahr999 < 0.45:
-            bull += 1  # зона накопления
-        elif ahr999 > 1.2:
-            bear += 1  # переоценён
-
-    # 12. BTC ETF Netflow
-    etf_netflow = coin_data.get("etf_netflow")
-    if etf_netflow is not None:
-        if etf_netflow > 50_000_000:  # > $50M приток
-            bull += 1  # институционалы покупают
-        elif etf_netflow < -50_000_000:  # > $50M отток
-            bear += 1  # институционалы продают
-
-    # 13. Bull Market Peak
-    bull_peak_pct = coin_data.get("bull_peak_pct")
-    if bull_peak_pct is not None:
-        if bull_peak_pct > 60:
-            bear += 1  # более 60% индикаторов пика сработали
-
-    # 14. Cross-Exchange: Bitget Account L/S (ритейл настроение)
-    bitget_acc_l = coin_data.get("bitget_long_acc")
-    if bitget_acc_l is not None:
-        # Контр-индикатор: если ритейл массово в лонгах — медвежий сигнал
-        if bitget_acc_l > 70:
-            bear += 1  # ритейл перегрет в лонгах (контр-индикатор)
-        elif bitget_acc_l < 35:
-            bull += 1  # ритейл массово в шортах (контр-индикатор — покупай)
-
-    # 15. Cross-Exchange: Bitget Position L/S vs Coinglass L/S divergence
-    bitget_pos_l = coin_data.get("bitget_long_pos")
-    cg_long_pct = coin_data.get("long_pct")
-    if bitget_pos_l is not None and cg_long_pct is not None:
-        # Если Bitget и Coinglass согласны — сильный сигнал
-        if bitget_pos_l > 55 and cg_long_pct > 55:
-            bull += 1  # обе платформы: позиции в лонгах
-        elif bitget_pos_l < 45 and cg_long_pct < 45:
-            bear += 1  # обе платформы: позиции в шортах
-
-    # 16. Cross-Exchange Funding Rate consensus (Kraken + dYdX vs Coinglass)
-    # Если funding на нескольких биржах совпадает — сильный сигнал
+    # 7. Cross-Exchange Funding consensus
     cg_fr = coin_data.get("funding_rate")
     kraken_fr = coin_data.get("kraken_funding")
     dydx_fr = coin_data.get("dydx_funding")
-    fr_negative_count = 0
-    fr_positive_count = 0
-    for fr_val in [cg_fr, kraken_fr, dydx_fr]:
-        if fr_val is not None:
-            if fr_val < -0.005:
-                fr_negative_count += 1
-            elif fr_val > 0.03:
-                fr_positive_count += 1
-    if fr_negative_count >= 2:
-        bull += 1  # 2+ бирж: шорты платят → разворот вверх вероятен
-    if fr_positive_count >= 2:
-        bear += 1  # 2+ бирж: лонги переплачивают → перегрев
+    fr_neg = sum(1 for f in [cg_fr, kraken_fr, dydx_fr] if f is not None and f < -0.005)
+    fr_pos = sum(1 for f in [cg_fr, kraken_fr, dydx_fr] if f is not None and f > 0.03)
+    if fr_neg >= 2:
+        bull += 1
+        factors_bull.append("мульти-биржевой short squeeze")
+    if fr_pos >= 2:
+        bear += 1
+        factors_bear.append("мульти-биржевой перегрев")
 
-    # 17. dYdX OI divergence (DEX vs CEX)
-    # Если OI на dYdX растёт при падении на CEX — smart money позиционируется
-    dydx_oi_val = coin_data.get("dydx_oi")
-    cg_oi_change = coin_data.get("oi_change_1h")
-    # Просто учитываем наличие dYdX OI данных как дополнительный фактор уверенности
-    # (без исторических данных пока не можем сравнивать изменения)
+    # 8. Bitget + Coinglass позиции согласны
+    bitget_pos_l = coin_data.get("bitget_long_pos")
+    cg_long_pct = coin_data.get("long_pct")
+    if bitget_pos_l is not None and cg_long_pct is not None:
+        if bitget_pos_l > 55 and cg_long_pct > 55:
+            bull += 1
+            factors_bull.append("позиции на двух биржах в лонгах")
+        elif bitget_pos_l < 45 and cg_long_pct < 45:
+            bear += 1
+            factors_bear.append("позиции на двух биржах в шортах")
 
-    # Сила = максимум из бычьих/медвежьих
-    strength = max(bull, bear)
-
-    if strength >= 4:
-        normalized = 5
-        label = "СИЛЬНЫЙ"
-    elif strength >= 3:
-        normalized = 4
-        label = "СИЛЬНЫЙ"
-    elif strength >= 2:
-        normalized = 3
-        label = "СРЕДНИЙ"
-    elif strength >= 1:
-        normalized = 2
-        label = "СРЕДНИЙ"
+    # Определяем направление
+    if bull > bear and bull >= 2:
+        direction = "UP"
+        direction_label = "вверх"
+    elif bear > bull and bear >= 2:
+        direction = "DOWN"
+        direction_label = "вниз"
     else:
-        normalized = 1
-        label = "СЛАБЫЙ"
+        direction = "SIDEWAYS"
+        direction_label = "боковик"
 
-    bars = "▓" * normalized + "░" * (5 - normalized)
-    return bars, label
+    return {
+        "direction": direction,
+        "direction_label": direction_label,
+        "dir_bull": bull,
+        "dir_bear": bear,
+        "dir_factors_bull": factors_bull,
+        "dir_factors_bear": factors_bear,
+    }
+
+
+def calculate_market_state(coin_data: dict, direction: dict) -> dict:
+    """
+    СЛОЙ 2: СОСТОЯНИЕ РЫНКА
+    Отвечает на вопрос: что это за фаза рынка?
+
+    Смотрит на: RSI, fear/greed, crowd bias, киты, netflow, ликвидационный дисбаланс
+    Это индикаторы НАСТРОЕНИЯ и ПОЗИЦИОНИРОВАНИЯ.
+    """
+    rsi = coin_data.get("rsi")
+    fg = coin_data.get("fear_greed")
+    fr = coin_data.get("funding_rate")
+    long_pct = coin_data.get("long_pct")
+    exchange_netflow = coin_data.get("exchange_netflow_btc")
+    bitget_acc_l = coin_data.get("bitget_long_acc")
+    sopr = coin_data.get("sopr")
+    liq_long = coin_data.get("liq_long")
+    liq_short = coin_data.get("liq_short")
+    change = coin_data.get("change_24h")
+
+    # Short squeeze: шорты переплачивают + шортов ликвидируют + страх
+    is_short_squeeze = False
+    if fr is not None and fr < -0.005:
+        if liq_short and liq_long:
+            try:
+                if float(liq_short) > float(liq_long) * 1.5:
+                    is_short_squeeze = True
+            except (ValueError, TypeError):
+                pass
+        if fg is not None and fg < 40:
+            is_short_squeeze = True
+
+    # Long squeeze: лонги переплачивают + лонгов ликвидируют + жадность
+    is_long_squeeze = False
+    if fr is not None and fr > 0.03:
+        if liq_long and liq_short:
+            try:
+                if float(liq_long) > float(liq_short) * 1.5:
+                    is_long_squeeze = True
+            except (ValueError, TypeError):
+                pass
+        if fg is not None and fg > 65:
+            is_long_squeeze = True
+
+    # Перегруз лонгов (толпа в лонгах + опасные признаки)
+    crowd_long_overload = (bitget_acc_l is not None and bitget_acc_l > 70)
+    crowd_short_overload = (bitget_acc_l is not None and bitget_acc_l < 30)
+
+    # Паника
+    is_panic = (fg is not None and fg < 20 and rsi is not None and rsi < 35)
+
+    # Накопление (киты выводят + рынок спокойный)
+    is_accumulation = (exchange_netflow is not None and exchange_netflow < -500
+                       and sopr is not None and sopr < 1.0)
+
+    # Распределение (киты заводят на биржи + рынок на пике)
+    is_distribution = (exchange_netflow is not None and exchange_netflow > 500
+                       and fg is not None and fg > 65)
+
+    # Определяем состояние (приоритет)
+    dir_code = direction.get("direction", "SIDEWAYS")
+    if is_short_squeeze and dir_code == "UP":
+        state = "SHORT_SQUEEZE"
+        state_label = "short squeeze"
+    elif is_long_squeeze and dir_code == "DOWN":
+        state = "LONG_SQUEEZE"
+        state_label = "long squeeze"
+    elif crowd_long_overload and dir_code != "UP":
+        state = "LONG_OVERLOAD"
+        state_label = "перегруз лонгов"
+    elif crowd_short_overload and dir_code != "DOWN":
+        state = "SHORT_OVERLOAD"
+        state_label = "перегруз шортов"
+    elif is_panic:
+        state = "PANIC"
+        state_label = "паника"
+    elif is_accumulation:
+        state = "ACCUMULATION"
+        state_label = "накопление"
+    elif is_distribution:
+        state = "DISTRIBUTION"
+        state_label = "распределение"
+    elif rsi is not None and rsi < 30 and change is not None and change < -3:
+        state = "BOUNCE"
+        state_label = "отскок"
+    else:
+        state = "NEUTRAL"
+        state_label = "боковик"
+
+    # Определяем ловушку
+    trap = "нет"
+    if is_short_squeeze or (crowd_short_overload and dir_code == "UP"):
+        trap = "шорты в ловушке"
+    elif is_long_squeeze or (crowd_long_overload and dir_code == "DOWN"):
+        trap = "лонги в ловушке"
+
+    return {
+        "state": state,
+        "state_label": state_label,
+        "trap": trap,
+    }
+
+
+def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict) -> dict:
+    """
+    СЛОЙ 3: КАЧЕСТВО СЕТАПА
+    Отвечает на вопрос: насколько хороший момент для входа?
+
+    Смотрит на: конфликты между индикаторами, совпадение китов/funding/pressure,
+    близость стопов/ликвидаций, не поздний ли вход.
+    """
+    score = 0
+    factors = []
+    conflicts = []
+
+    dir_code = direction.get("direction", "SIDEWAYS")
+    dir_bull = direction.get("dir_bull", 0)
+    dir_bear = direction.get("dir_bear", 0)
+    state_code = market_state.get("state", "NEUTRAL")
+    trap = market_state.get("trap", "нет")
+
+    # 1. Совпадение направления и состояния
+    if dir_code == "UP" and state_code in ("SHORT_SQUEEZE", "ACCUMULATION", "PANIC", "BOUNCE", "SHORT_OVERLOAD"):
+        score += 2
+        factors.append("направление и состояние совпадают")
+    elif dir_code == "DOWN" and state_code in ("LONG_SQUEEZE", "DISTRIBUTION", "LONG_OVERLOAD"):
+        score += 2
+        factors.append("направление и состояние совпадают")
+    elif dir_code == "SIDEWAYS":
+        score -= 1
+        conflicts.append("нет выраженного направления")
+
+    # 2. Сила направления (много факторов согласны)
+    agreement = max(dir_bull, dir_bear)
+    total = dir_bull + dir_bear
+    if agreement >= 5:
+        score += 2
+        factors.append(f"сильное согласие ({agreement} факторов)")
+    elif agreement >= 3:
+        score += 1
+        factors.append(f"умеренное согласие ({agreement} факторов)")
+
+    # 3. Есть ловушка? (это усиливает сигнал)
+    if trap != "нет":
+        score += 1
+        factors.append(f"есть ловушка ({trap})")
+
+    # 4. Киты + давление совпадают
+    exchange_netflow = coin_data.get("exchange_netflow_btc")
+    long_pct = coin_data.get("long_pct")
+    if exchange_netflow is not None and long_pct is not None:
+        if exchange_netflow < -500 and long_pct > 52:
+            score += 1
+            factors.append("киты и давление совпадают (бычий)")
+        elif exchange_netflow > 500 and long_pct < 48:
+            score += 1
+            factors.append("киты и давление совпадают (медвежий)")
+        elif (exchange_netflow < -500 and long_pct < 48) or (exchange_netflow > 500 and long_pct > 52):
+            score -= 1
+            conflicts.append("киты и давление расходятся")
+
+    # 5. Конфликт: направление вверх но толпа уже перегружена лонгами
+    bitget_acc_l = coin_data.get("bitget_long_acc")
+    if dir_code == "UP" and bitget_acc_l is not None and bitget_acc_l > 70:
+        score -= 1
+        conflicts.append("толпа уже перегружена лонгами")
+
+    # 6. Конфликт: направление вниз но толпа уже перегружена шортами
+    if dir_code == "DOWN" and bitget_acc_l is not None and bitget_acc_l < 30:
+        score -= 1
+        conflicts.append("толпа уже перегружена шортами")
+
+    # 7. RSI + Fear/Greed согласны с направлением
+    rsi = coin_data.get("rsi")
+    fg = coin_data.get("fear_greed")
+    if dir_code == "UP":
+        if rsi is not None and rsi < 35 and fg is not None and fg < 35:
+            score += 1
+            factors.append("перепродан + страх = хороший вход для покупки")
+    elif dir_code == "DOWN":
+        if rsi is not None and rsi > 65 and fg is not None and fg > 65:
+            score += 1
+            factors.append("перекуплен + жадность = хороший вход для продажи")
+
+    # Определяем качество
+    if score >= 4:
+        quality = "STRONG"
+        quality_label = "сильный"
+    elif score >= 2:
+        quality = "MEDIUM"
+        quality_label = "средний"
+    elif score >= 0:
+        quality = "WEAK"
+        quality_label = "слабый"
+    else:
+        quality = "POOR"
+        quality_label = "плохой"
+
+    # ── УВЕРЕННОСТЬ (на основе качества + согласия) ──
+    if total == 0:
+        conf_level = 1
+        conf_label = "нет данных"
+    else:
+        ratio = agreement / total if total > 0 else 0
+        if ratio >= 0.85 and agreement >= 5 and score >= 3:
+            conf_level = 5
+            conf_label = "очень высокая"
+        elif ratio >= 0.75 and agreement >= 4 and score >= 2:
+            conf_level = 4
+            conf_label = "высокая"
+        elif ratio >= 0.65 and agreement >= 3 and score >= 1:
+            conf_level = 3
+            conf_label = "средняя"
+        elif ratio >= 0.55 and score >= 0:
+            conf_level = 2
+            conf_label = "ниже средней"
+        else:
+            conf_level = 1
+            conf_label = "слабая"
+
+    conf_bars = "█" * conf_level + "░" * (5 - conf_level)
+
+    # ── СИГНАЛ (направление + сила) ──
+    if dir_code == "UP" and quality in ("STRONG", "MEDIUM"):
+        recommendation = "покупать"
+    elif dir_code == "DOWN" and quality in ("STRONG", "MEDIUM"):
+        recommendation = "продавать"
+    else:
+        recommendation = "выжидать"
+
+    # Сила сигнала
+    if quality == "STRONG":
+        strength = "сильно"
+        sig_normalized = 5
+    elif quality == "MEDIUM":
+        strength = "умеренно"
+        sig_normalized = 3
+    elif quality == "WEAK":
+        strength = "слабо"
+        sig_normalized = 2
+    else:
+        strength = "слабо"
+        sig_normalized = 1
+
+    signal_bar = "▓" * sig_normalized + "░" * (5 - sig_normalized)
+    signal_label = strength.upper()
+
+    # Горизонт
+    if state_code in ("BOUNCE", "SHORT_SQUEEZE", "LONG_SQUEEZE"):
+        horizon = "4-12 часов"
+    elif state_code in ("PANIC", "SHORT_OVERLOAD", "LONG_OVERLOAD"):
+        horizon = "краткосрочный отскок"
+    elif state_code in ("ACCUMULATION", "DISTRIBUTION"):
+        horizon = "среднесрочно"
+    else:
+        horizon = "1-2 дня"
+
+    return {
+        "quality": quality,
+        "quality_label": quality_label,
+        "score": score,
+        "factors": factors,
+        "conflicts": conflicts,
+        "confidence_bar": conf_bars,
+        "confidence_label": conf_label,
+        "recommendation": recommendation,
+        "strength": strength,
+        "signal_bar": signal_bar,
+        "signal_label": signal_label,
+        "horizon": horizon,
+    }
+
+
+def run_signal_pipeline(coin_data: dict) -> dict:
+    """
+    Главная функция: запускает 3-слойный pipeline.
+    Возвращает полный scoring для LLM и для отображения.
+    """
+    # Слой 1: Направление
+    direction = calculate_direction(coin_data)
+
+    # Слой 2: Состояние рынка
+    market_state = calculate_market_state(coin_data, direction)
+
+    # Слой 3: Качество сетапа
+    setup = calculate_setup_quality(coin_data, direction, market_state)
+
+    return {
+        # Слой 1
+        "direction": direction["direction"],
+        "direction_label": direction["direction_label"],
+        "dir_bull": direction["dir_bull"],
+        "dir_bear": direction["dir_bear"],
+        "dir_factors_bull": direction["dir_factors_bull"],
+        "dir_factors_bear": direction["dir_factors_bear"],
+        # Слой 2
+        "state": market_state["state"],
+        "state_label": market_state["state_label"],
+        "trap": market_state["trap"],
+        # Слой 3
+        "quality": setup["quality"],
+        "quality_label": setup["quality_label"],
+        "score": setup["score"],
+        "factors": setup["factors"],
+        "conflicts": setup["conflicts"],
+        # Финальные выходы
+        "signal_bar": setup["signal_bar"],
+        "signal_label": setup["signal_label"],
+        "confidence_bar": setup["confidence_bar"],
+        "confidence_label": setup["confidence_label"],
+        "recommendation": setup["recommendation"],
+        "strength": setup["strength"],
+        "horizon": setup["horizon"],
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# КАРТА ЛИКВИДНОСТИ (расчёт уровней ликвидаций)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def calculate_liquidation_levels(coin_data: dict) -> dict:
+    """
+    Расчёт ключевых уровней ликвидаций на основе текущей цены и плечей.
+
+    Логика: большинство трейдеров используют плечи 10x-25x.
+    При 10x лонги ликвидируются при падении ~10%, шорты при росте ~10%.
+    При 25x — при движении ~4%.
+
+    Кластеры ликвидаций (магниты цены):
+    - Ближний: 3-5% от цены (20-25x плечи) — самые уязвимые позиции
+    - Дальний: 8-10% от цены (10x плечи) — основная масса
+
+    Учитываем перекос лонг/шорт: если больше лонгов — ликвидации лонгов плотнее.
+    """
+    price = coin_data.get("price")
+    if not price or price <= 0:
+        return {}
+
+    # Соотношение лонг/шорт — определяет плотность ликвидаций
+    long_pct = coin_data.get("long_pct")
+    short_pct = 100 - long_pct if long_pct is not None else None
+
+    # Средневзвешенное расстояние ликвидаций по плечам
+    # Самые популярные плечи: 10x (10%), 20x (5%), 25x (4%)
+    # Средний кластер: ~5-7% от цены (смесь плечей)
+    # Ближний кластер: ~3-4% (высокие плечи 20-25x)
+
+    # Основной уровень — плотный кластер ликвидаций (~5% от цены)
+    base_pct = 0.05  # 5% — среднее по популярным плечам
+
+    # Если есть сильный перекос — ближе к текущей цене
+    # (больше позиций = больше ликвидаций = сильнее магнит)
+    if long_pct is not None:
+        if long_pct > 60:
+            # Много лонгов — ликвидации лонгов (ниже) ближе и плотнее
+            long_dist = base_pct * 0.85  # 4.25%
+            short_dist = base_pct * 1.15  # 5.75%
+        elif long_pct < 40:
+            # Много шортов — ликвидации шортов (выше) ближе
+            long_dist = base_pct * 1.15
+            short_dist = base_pct * 0.85
+        else:
+            long_dist = base_pct
+            short_dist = base_pct
+    else:
+        long_dist = base_pct
+        short_dist = base_pct
+
+    # Уровни ликвидаций
+    liq_shorts_price = price * (1 + short_dist)   # выше цены — ликвидации шортов
+    liq_longs_price = price * (1 - long_dist)      # ниже цены — ликвидации лонгов
+
+    # Округляем красиво
+    if price > 10000:
+        # BTC — до сотен
+        liq_shorts_price = round(liq_shorts_price / 100) * 100
+        liq_longs_price = round(liq_longs_price / 100) * 100
+    elif price > 100:
+        # ETH, BNB, SOL — до единиц
+        liq_shorts_price = round(liq_shorts_price)
+        liq_longs_price = round(liq_longs_price)
+    else:
+        # Мелкие — до десятых
+        liq_shorts_price = round(liq_shorts_price, 1)
+        liq_longs_price = round(liq_longs_price, 1)
+
+    return {
+        "liq_level_shorts": liq_shorts_price,   # Уровень где ликвидируют шортов (выше)
+        "liq_level_longs": liq_longs_price,      # Уровень где ликвидируют лонгов (ниже)
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2051,13 +2373,29 @@ async def collect_all():
                 "mkt_liq_short": total_liq_short_1h,
             }
 
-            # Рассчитываем сигнал
-            signal_bar, signal_label = calculate_signal(coin_data)
+            # ══ 3-СЛОЙНЫЙ PIPELINE ══
+            pipeline = run_signal_pipeline(coin_data)
+            signal_bar = pipeline["signal_bar"]
+            signal_label = pipeline["signal_label"]
+            conf_bar = pipeline["confidence_bar"]
+            conf_label = pipeline["confidence_label"]
 
-            # LLM-анализ (если есть ключ и достаточно данных)
+            # Рассчитываем карту ликвидности
+            liq_levels = calculate_liquidation_levels(coin_data)
+
+            # LLM-анализ (получает pre-scored pipeline, только формулирует текст)
             llm_data = {}
             if HAS_ANTHROPIC and coin_data.get("price") and coin_data.get("oi"):
-                llm_data = await generate_llm_analysis(symbol, coin_data)
+                llm_data = await generate_llm_analysis(symbol, coin_data, pipeline)
+            else:
+                # Без LLM — используем pipeline данные напрямую
+                llm_data = {
+                    "recommendation": pipeline["recommendation"],
+                    "strength": pipeline["strength"],
+                    "trap": pipeline["trap"] if pipeline["trap"] != "нет" else "",
+                    "horizon": pipeline["horizon"],
+                    "what_happening": "",
+                }
 
             # Формируем запись для Supabase
             oi_val = coin_data.get("oi")
@@ -2115,8 +2453,13 @@ async def collect_all():
                 "signal": signal_bar,
                 "label": signal_label,
                 "signal_label": signal_label,
+                "confidence_bar": conf_bar,
+                "confidence_label": conf_label,
+                "liq_level_shorts": fmt_price(liq_levels.get("liq_level_shorts")) if liq_levels.get("liq_level_shorts") else "",
+                "liq_level_longs": fmt_price(liq_levels.get("liq_level_longs")) if liq_levels.get("liq_level_longs") else "",
                 "llm_text": llm_data.get("llm_text", ""),
                 "what_happening": llm_data.get("what_happening", ""),
+                "horizon": llm_data.get("horizon", ""),
                 "trap": llm_data.get("trap", ""),
                 "recommendation": llm_data.get("recommendation", ""),
                 "strength": llm_data.get("strength", ""),

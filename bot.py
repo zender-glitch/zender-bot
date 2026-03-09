@@ -287,6 +287,17 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             sig_text += f" ({strength_label})"
         lines.append(sig_text)
 
+    # ── УВЕРЕННОСТЬ СИГНАЛА ──
+    conf_bar = d.get("confidence_bar", "")
+    conf_label = d.get("confidence_label", "")
+    if conf_bar and conf_label:
+        lines.append(f"🎯 {conf_bar} {html_lib.escape(conf_label)}")
+
+    # ── ГОРИЗОНТ ──
+    horizon = _clean(d.get("horizon", ""))
+    if horizon:
+        lines.append(f"⏱ {html_lib.escape(horizon)}")
+
     lines.append("")
     lines.append("━━━ РЫНОК ━━━")
 
@@ -318,20 +329,14 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         except (ValueError, TypeError):
             pass
 
-    # Лонг/Шорт ratio (Coinglass taker)
+    # Давление рынка (Coinglass Taker Buy/Sell — агрессивные маркет-ордера)
     if _has(long_p) and _has(short_p):
         try:
             lp = float(long_p)
             sp = float(short_p)
-            if lp > 55:
-                ls_hint = "быки давят"
-            elif sp > 55:
-                ls_hint = "медведи давят"
-            else:
-                ls_hint = "баланс"
-            lines.append(f"⚖️ Лонг/Шорт: {lp:.0f}% / {sp:.0f}% — {ls_hint}")
+            lines.append(f"⚔️ Давление: BUY {lp:.0f}% / SELL {sp:.0f}%")
         except (ValueError, TypeError):
-            lines.append(f"⚖️ Лонг/Шорт: {long_p}% / {short_p}%")
+            lines.append(f"⚔️ Давление: BUY {long_p}% / SELL {short_p}%")
 
     # Фандинг с числом
     if _has(fr_val):
@@ -397,32 +402,47 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         except (ValueError, TypeError):
             pass
 
-    # Толпа — показываем ТОЛЬКО при сильном перекосе (>65%)
-    if _has(bg_long_acc):
-        try:
-            bg_l = float(bg_long_acc)
-            bg_s = float(bg_short_acc)
-            if bg_l > 65:
-                lines.append(f"👥 Толпа: {bg_l:.0f}% лонг — перекос")
-            elif bg_s > 65:
-                lines.append(f"👥 Толпа: {bg_s:.0f}% шорт — перекос")
-        except (ValueError, TypeError):
-            pass
-
-    # ── КИТЫ (Exchange Netflow — куда двигают крупные игроки) ──
+    # ── КИТЫ vs ТОЛПА ──
     netflow = d.get("exchange_netflow_btc", "—")
     eth_gas = d.get("eth_gas_avg", "—")
-    if coin == "BTC" and _has(netflow):
-        try:
-            nf = float(str(netflow).replace(",", "").replace("+", ""))
-            if nf < -100:
-                lines.append(f"🐋 Киты: выводят с бирж ({nf:,.0f} BTC) — возможно накопление")
-            elif nf > 100:
-                lines.append(f"🐋 Киты: заводят на биржи (+{nf:,.0f} BTC) — возможно продажа")
-            else:
-                lines.append(f"🐋 Киты: без движения ({nf:+,.0f} BTC)")
-        except (ValueError, TypeError):
-            pass
+    has_whale = (coin == "BTC" and _has(netflow))
+    has_crowd = _has(bg_long_acc)
+
+    if has_whale or has_crowd:
+        lines.append("")
+        lines.append("🐋 КИТЫ vs ТОЛПА")
+
+        # Киты (Exchange Netflow)
+        if has_whale:
+            try:
+                nf = float(str(netflow).replace(",", "").replace("+", ""))
+                if nf < -100:
+                    lines.append("киты покупают (выводят с бирж)")
+                elif nf > 100:
+                    lines.append("киты продают (заводят на биржи)")
+                else:
+                    lines.append("киты выжидают")
+            except (ValueError, TypeError):
+                pass
+
+        # Толпа (Bitget Account L/S — ритейл)
+        if has_crowd:
+            try:
+                bg_l = float(bg_long_acc)
+                bg_s = float(bg_short_acc)
+                if bg_l > 70:
+                    lines.append(f"толпа перегружена лонгами ({bg_l:.0f}%)")
+                elif bg_l > 60:
+                    lines.append(f"толпа в лонгах ({bg_l:.0f}%)")
+                elif bg_s > 70:
+                    lines.append(f"толпа перегружена шортами ({bg_s:.0f}%)")
+                elif bg_s > 60:
+                    lines.append(f"толпа в шортах ({bg_s:.0f}%)")
+                else:
+                    lines.append("толпа в балансе")
+            except (ValueError, TypeError):
+                pass
+
     # ETH Gas (только для ETH)
     if coin == "ETH" and _has(eth_gas):
         try:
@@ -437,6 +457,17 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         except (ValueError, TypeError):
             pass
 
+    # ── ЛИКВИДНОСТЬ (карта ликвидаций — магниты цены) ──
+    liq_lvl_shorts = d.get("liq_level_shorts", "")
+    liq_lvl_longs = d.get("liq_level_longs", "")
+    if liq_lvl_shorts or liq_lvl_longs:
+        lines.append("")
+        lines.append("━━━ ЛИКВИДНОСТЬ ━━━")
+        if liq_lvl_shorts:
+            lines.append(f"{html_lib.escape(liq_lvl_shorts)} — стопы шортов")
+        if liq_lvl_longs:
+            lines.append(f"{html_lib.escape(liq_lvl_longs)} — стопы лонгов")
+
     # ── УРОВНИ ──
     lines.append("")
     lines.append("━━━ УРОВНИ ━━━")
@@ -446,10 +477,22 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     liq_dn = d.get("liq_dn", "—")
     if _has(liq_up) or _has(liq_dn):
         lines.append("💥 Ликвидации (1ч)")
-        if _has(liq_up):
-            lines.append(f"шорты: {liq_up}")
-        if _has(liq_dn):
-            lines.append(f"лонги: {liq_dn}")
+        if _has(liq_up) and _has(liq_dn):
+            try:
+                lu = float(str(liq_up).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
+                ld = float(str(liq_dn).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
+                up_arrow = " ↑" if lu > ld else ""
+                dn_arrow = " ↑" if ld > lu else ""
+                lines.append(f"шорты: {liq_up}{up_arrow}")
+                lines.append(f"лонги: {liq_dn}{dn_arrow}")
+            except (ValueError, TypeError):
+                lines.append(f"шорты: {liq_up}")
+                lines.append(f"лонги: {liq_dn}")
+        else:
+            if _has(liq_up):
+                lines.append(f"шорты: {liq_up}")
+            if _has(liq_dn):
+                lines.append(f"лонги: {liq_dn}")
 
     # Вход / Стоп / Цель
     if entry or stop or target:
