@@ -1,8 +1,8 @@
 """
-ZENDER COMMANDER TERMINAL — Backtest LLM Recommendations v2
+ZENDER COMMANDER TERMINAL — Backtest LLM Recommendations v4
 Прогоняет LLM-анализ по историческим данным за 14 дней.
-Обновлённый промпт (решительный, не "выжидать" по умолчанию).
-Работает даже без OI/FR history (использует доступные данные).
+Промпт v4: RSI, MACD, SMA, Exchange Netflow, SOPR + temperature=0.
+BGeometrics исторические данные (SOPR, Exchange Netflow, RSI, MACD, SMA).
 """
 
 import asyncio
@@ -17,6 +17,7 @@ ANTHROPIC_KEY = os.environ.get("ANTHROPIC_KEY", "")
 
 CG_BASE = "https://open-api-v4.coinglass.com"
 CG_HEADERS = {"CG-API-KEY": COINGLASS_API_KEY}
+BGEOMETRICS_BASE = "https://bitcoin-data.com/v1"
 
 SYMBOL = "BTC"
 DAYS = 14
@@ -63,6 +64,26 @@ async def cg_get(path, params=None):
     except Exception as e:
         print(f"  ❌ CG {path}: {e}")
         return None
+
+
+async def bgeometrics_get(metric):
+    """Загружает полную историю метрики из BGeometrics."""
+    url = f"{BGEOMETRICS_BASE}/{metric}"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                print(f"  ⚠️ BGeometrics {metric}: HTTP {resp.status_code}")
+                return []
+            data = resp.json()
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict):
+                return [data]
+            return []
+    except Exception as e:
+        print(f"  ❌ BGeometrics {metric}: {e}")
+        return []
 
 
 async def fetch_price_history():
@@ -150,6 +171,71 @@ async def fetch_fear_greed_history():
         return []
 
 
+async def fetch_bgeometrics_history():
+    """
+    Загружаем BGeometrics исторические данные: SOPR, Exchange Netflow, Technical Indicators.
+    4 запроса — укладываемся в лимит (8 req/hour, 15 req/day).
+    Возвращаем dict индексированный по дате.
+    """
+    print("🔗 Загружаем BGeometrics on-chain history...")
+    bg_data = {}  # {date: {sopr, netflow, rsi, macd, sma50, sma200}}
+
+    # SOPR history
+    sopr_hist = await bgeometrics_get("sopr")
+    await asyncio.sleep(2)
+    for item in sopr_hist:
+        d = item.get("d")
+        sopr_val = item.get("sopr")
+        if d and sopr_val is not None:
+            bg_data.setdefault(d, {})["sopr"] = float(sopr_val)
+    print(f"  📊 SOPR: {len([i for i in sopr_hist if i.get('sopr')])} записей")
+
+    # Exchange Netflow
+    netflow_hist = await bgeometrics_get("exchange-netflow-btc")
+    await asyncio.sleep(2)
+    for item in netflow_hist:
+        d = item.get("d")
+        nf_val = item.get("exchangeNetflowBtc") or item.get("exchange_netflow_btc") or item.get("value")
+        if d and nf_val is not None:
+            bg_data.setdefault(d, {})["netflow"] = float(nf_val)
+    print(f"  🔄 Netflow: {len([i for i in netflow_hist if i.get('exchangeNetflowBtc') or i.get('value')])} записей")
+
+    # Exchange Reserve
+    reserve_hist = await bgeometrics_get("exchange-reserve-btc")
+    await asyncio.sleep(2)
+    for item in reserve_hist:
+        d = item.get("d")
+        r_val = item.get("exchangeReserveBtc") or item.get("exchange_reserve_btc") or item.get("value")
+        if d and r_val is not None:
+            bg_data.setdefault(d, {})["reserve"] = float(r_val)
+    print(f"  🏦 Reserve: {len([i for i in reserve_hist if i.get('exchangeReserveBtc') or i.get('value')])} записей")
+
+    # Technical Indicators (RSI, MACD, SMA50, SMA200)
+    tech_hist = await bgeometrics_get("technical-indicators")
+    await asyncio.sleep(2)
+    for item in tech_hist:
+        d = item.get("d")
+        if not d:
+            continue
+        bg_data.setdefault(d, {})
+        rsi = item.get("rsi") or item.get("RSI")
+        macd = item.get("macd") or item.get("MACD")
+        sma50 = item.get("sma50") or item.get("SMA50")
+        sma200 = item.get("sma200") or item.get("SMA200")
+        if rsi is not None:
+            bg_data[d]["rsi"] = float(rsi)
+        if macd is not None:
+            bg_data[d]["macd"] = float(macd)
+        if sma50 is not None:
+            bg_data[d]["sma50"] = float(sma50)
+        if sma200 is not None:
+            bg_data[d]["sma200"] = float(sma200)
+    print(f"  📈 Tech Indicators: {len([i for i in tech_hist if i.get('rsi') or i.get('RSI')])} записей")
+
+    print(f"  ✅ BGeometrics: данные за {len(bg_data)} дней")
+    return bg_data
+
+
 def find_by_date(history, target_date):
     """Ищет запись в исторических данных по дате"""
     if not history:
@@ -168,7 +254,7 @@ def find_by_date(history, target_date):
 
 
 async def call_llm(prompt: str) -> dict:
-    """Вызов Claude API"""
+    """Вызов Claude API с temperature=0"""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -181,6 +267,7 @@ async def call_llm(prompt: str) -> dict:
                 json={
                     "model": "claude-haiku-4-5-20251001",
                     "max_tokens": 300,
+                    "temperature": 0,
                     "messages": [{"role": "user", "content": prompt}],
                 }
             )
@@ -209,7 +296,6 @@ async def call_llm(prompt: str) -> dict:
                     if val:
                         result["zones"] = val
 
-            # Fallback: ищем ключевые слова если парсер не нашёл
             if not result.get("recommendation"):
                 text_lower = text.lower()
                 if "покупать" in text_lower:
@@ -227,7 +313,7 @@ async def call_llm(prompt: str) -> dict:
 
 async def run_backtest():
     print("=" * 60)
-    print("🔬 ZENDER BACKTEST v2 — улучшенный промпт")
+    print("🔬 ZENDER BACKTEST v4 — SOPR + RSI + MACD + Netflow")
     print("=" * 60)
     print()
 
@@ -242,6 +328,10 @@ async def run_backtest():
     ls_hist = await fetch_ls_history()
     await asyncio.sleep(1)
     fg_hist = await fetch_fear_greed_history()
+    await asyncio.sleep(1)
+
+    # Новое: BGeometrics история (SOPR, Netflow, RSI, MACD, SMA)
+    bg_hist = await fetch_bgeometrics_history()
 
     print()
     print("=" * 60)
@@ -259,14 +349,13 @@ async def run_backtest():
         next_price = next_day["price"]
         change_pct = ((next_price - price) / price) * 100
 
-        # Изменение 24ч для текущего дня
         if i > 0:
             prev_price = prices[i - 1]["price"]
             day_change = ((price - prev_price) / prev_price) * 100
         else:
             day_change = 0
 
-        # Подбираем данные
+        # Coinglass данные
         liq_long = None
         liq_short = None
         long_pct = None
@@ -295,6 +384,47 @@ async def run_backtest():
                 except (ValueError, TypeError):
                     pass
 
+        # BGeometrics данные по дате
+        bg = bg_hist.get(date, {})
+        sopr = bg.get("sopr")
+        netflow = bg.get("netflow")
+        reserve = bg.get("reserve")
+        rsi = bg.get("rsi")
+        macd = bg.get("macd")
+        sma50 = bg.get("sma50")
+        sma200 = bg.get("sma200")
+
+        # On-chain блок для промпта
+        onchain_block = ""
+        onchain_lines = []
+        if any([sopr, netflow, reserve]):
+            onchain_lines.append(f"\nON-CHAIN ДАННЫЕ (BTC блокчейн):")
+            if reserve:
+                onchain_lines.append(f"- Резерв BTC на биржах: {reserve:,.0f} BTC")
+            if netflow is not None:
+                direction = "ОТТОК с бирж (бычий — холдят)" if netflow < 0 else "ПРИТОК на биржи (медвежий — готовятся продавать)" if netflow > 0 else "баланс"
+                onchain_lines.append(f"- Нетто поток бирж: {netflow:,.2f} BTC — {direction}")
+            if sopr:
+                sopr_hint = "продают в прибыль" if sopr > 1 else "продают в убыток (капитуляция)" if sopr < 1 else "безубыток"
+                onchain_lines.append(f"- SOPR: {sopr} — {sopr_hint}")
+
+        if any([rsi, macd, sma50, sma200]):
+            onchain_lines.append(f"\nТЕХНИЧЕСКИЕ ИНДИКАТОРЫ:")
+            if rsi is not None:
+                rsi_hint = "перекуплен (>70)" if rsi > 70 else "перепродан (<30)" if rsi < 30 else "нейтральная зона"
+                onchain_lines.append(f"- RSI: {rsi:.1f} — {rsi_hint}")
+            if macd is not None:
+                macd_hint = "бычий импульс" if macd > 0 else "медвежий импульс"
+                onchain_lines.append(f"- MACD: {macd:.2f} — {macd_hint}")
+            if sma50 and sma200:
+                if sma50 > sma200:
+                    onchain_lines.append(f"- SMA50/200: golden cross (SMA50 ${sma50:,.0f} > SMA200 ${sma200:,.0f}) — бычий")
+                else:
+                    onchain_lines.append(f"- SMA50/200: death cross (SMA50 ${sma50:,.0f} < SMA200 ${sma200:,.0f}) — медвежий")
+
+        if onchain_lines:
+            onchain_block = "\n".join(onchain_lines)
+
         prompt = f"""Ты — опытный крипто-аналитик. Проанализируй данные {SYMBOL} и дай РЕШИТЕЛЬНЫЙ анализ.
 
 ДАННЫЕ {SYMBOL} на {date}:
@@ -303,7 +433,7 @@ async def run_backtest():
 - Funding Rate: нет данных
 - Покупатели/Продавцы (taker): {long_pct or '?'}% / {short_pct or '?'}%
 - Ликвидации {SYMBOL}: лонги {fmt_usd(liq_long)}, шорты {fmt_usd(liq_short)}
-- Fear & Greed: {fg_val or '?'} ({fg_label or '?'})
+- Fear & Greed: {fg_val or '?'} ({fg_label or '?'}){onchain_block}
 
 ПРАВИЛА ОЦЕНКИ (следуй им строго):
 
@@ -313,6 +443,10 @@ async def run_backtest():
 - Funding Rate отрицательный (шорты переплачивают — разворот вверх вероятен)
 - Fear & Greed < 30 (сильный страх — возможность покупки на панике)
 - Ликвидации шортов > ликвидаций лонгов в 2+ раза (шортов выдавливают)
+- Нетто поток бирж отрицательный (BTC выводят — холдят — бычий)
+- SOPR < 1 (капитуляция — дно может быть близко)
+- RSI < 30 (перепродан — разворот вверх вероятен)
+- MACD > 0 и растёт (бычий импульс)
 
 ПРОДАВАТЬ если 2+ условий совпадают:
 - Продавцы > 52% (медведи доминируют)
@@ -320,17 +454,38 @@ async def run_backtest():
 - Funding Rate > +0.05% (лонги переплачивают — рынок перегрет)
 - Fear & Greed > 75 (сильная жадность — пора фиксировать прибыль)
 - Ликвидации лонгов > ликвидаций шортов в 2+ раза (лонги ликвидируют)
+- Нетто поток бирж положительный (BTC заводят на биржи — медвежий)
+- SOPR > 1.05 (массово фиксируют прибыль — возможна коррекция)
+- RSI > 70 (перекуплен — коррекция вероятна)
+- MACD < 0 и падает (медвежий импульс)
 
 ВЫЖИДАТЬ только если сигналы явно противоречат друг другу и нет перевеса ни в одну сторону.
 
 ВАЖНО: НЕ выбирай "выжидать" по умолчанию! Если есть 2+ совпадающих сигнала — давай направление.
+
+ПРАВИЛА ДЛЯ ЗОН (СТРОГО!):
+- Зона покупки ДОЛЖНА ВКЛЮЧАТЬ текущую цену! Формат: от (цена - 1-2%) до (цена + 0.5%)
+- Зона продажи = от (цена + 2-3%) до (цена + 4-5%)
+- НИКОГДА не давай зону покупки которая ПОЛНОСТЬЮ ниже текущей цены
 
 ОТВЕТЬ СТРОГО В ФОРМАТЕ (3 строки, без лишнего):
 АНАЛИЗ: [2-3 предложения простым языком]
 РЕКОМЕНДАЦИЯ: [одно слово: покупать / продавать / выжидать]
 ЗОНЫ: покупка $XXX,XXX–$XXX,XXX | продажа $XXX,XXX–$XXX,XXX"""
 
-        print(f"📅 {date} | Цена: ${price:,.0f}")
+        # Лог дня
+        extras = []
+        if sopr:
+            extras.append(f"SOPR:{sopr:.3f}")
+        if rsi is not None:
+            extras.append(f"RSI:{rsi:.0f}")
+        if macd is not None:
+            extras.append(f"MACD:{macd:.0f}")
+        if netflow is not None:
+            extras.append(f"NF:{netflow:+,.0f}")
+        extra_str = f" | {' '.join(extras)}" if extras else ""
+
+        print(f"📅 {date} | Цена: ${price:,.0f}{extra_str}")
         llm_result = await call_llm(prompt)
         rec = llm_result.get("recommendation", "—")
         analysis = llm_result.get("analysis", "—")
@@ -354,6 +509,10 @@ async def run_backtest():
             "recommendation": rec,
             "correct": correct,
             "analysis": analysis,
+            "sopr": sopr,
+            "rsi": rsi,
+            "macd": macd,
+            "netflow": netflow,
         })
 
         print(f"  🤖 Рекомендация: {rec}")
@@ -361,11 +520,11 @@ async def run_backtest():
         print(f"  {icon} {'Верно' if correct else ('Неверно' if correct is False else 'Нейтрально')}")
         print()
 
-        await asyncio.sleep(3)  # 3 сек между запросами — не упираться в rate limit
+        await asyncio.sleep(3)
 
     # ── Итоги ──
     print("=" * 60)
-    print("📊 ИТОГИ БЭКТЕСТА v2")
+    print("📊 ИТОГИ БЭКТЕСТА v4 (SOPR + RSI + MACD + Netflow)")
     print("=" * 60)
 
     total = len(results)
@@ -410,6 +569,10 @@ async def run_backtest():
         elif "продавать" in r["recommendation"]:
             pnl -= r["change"]
     print(f"\n💰 Суммарный PnL (если следовать рекомендациям): {pnl:+.2f}%")
+
+    # Доп. статистика по on-chain
+    days_with_bg = sum(1 for r in results if r.get("sopr") or r.get("rsi"))
+    print(f"\n📊 Дней с BGeometrics данными: {days_with_bg}/{total}")
 
     print(f"\n{'='*60}")
 
