@@ -416,9 +416,9 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         try:
             nf = float(str(netflow).replace(",", "").replace("+", ""))
             if nf < -100:
-                lines.append(f"🐋 Киты: выводят с бирж ({nf:,.0f} BTC)")
+                lines.append(f"🐋 Киты: выводят с бирж ({nf:,.0f} BTC) — возможно накопление")
             elif nf > 100:
-                lines.append(f"🐋 Киты: заводят на биржи (+{nf:,.0f} BTC)")
+                lines.append(f"🐋 Киты: заводят на биржи (+{nf:,.0f} BTC) — возможно продажа")
             else:
                 lines.append(f"🐋 Киты: без движения ({nf:+,.0f} BTC)")
         except (ValueError, TypeError):
