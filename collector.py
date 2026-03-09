@@ -1606,14 +1606,16 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
 2. ВХОД / СТОП / ЦЕЛЬ — конкретные цены
 
 ПРАВИЛА:
-- ЧТО_ПРОИСХОДИТ: объясни ПОЧЕМУ такой сигнал, простым языком, БЕЗ терминов (RSI, MACD, SOPR, Bid/Ask — ЗАПРЕЩЕНЫ)
+- ЧТО_ПРОИСХОДИТ: МАКСИМУМ 80 СИМВОЛОВ. Одно предложение! Объясни простым языком.
+- ЗАПРЕЩЁННЫЕ СЛОВА: RSI, MACD, SOPR, Bid/Ask, death cross, golden cross, short squeeze, funding rate, Fear & Greed, netflow, leverage. Используй: "тренд вниз", "страх на рынке", "покупатели давят", "шорты в ловушке" и т.д.
 - ВХОД: текущая цена или чуть ниже для покупки / чуть выше для продажи
 - СТОП: 1-2% от входа
 - ЦЕЛЬ: 2-4% от входа
 - Без ** звёздочек и markdown
+- НЕ ПИШИ БОЛЬШЕ 4 СТРОК
 
-ОТВЕТЬ СТРОГО В ФОРМАТЕ:
-ЧТО_ПРОИСХОДИТ: [до 80 символов, простым языком]
+ОТВЕТЬ СТРОГО В ФОРМАТЕ (4 строки, не больше):
+ЧТО_ПРОИСХОДИТ: [одно предложение, до 80 символов]
 ВХОД: [$XXX,XXX]
 СТОП: [$XXX,XXX]
 ЦЕЛЬ: [$XXX,XXX]"""
@@ -1674,6 +1676,19 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
                         if len(result["what_happening"]) > 80:
                             result["what_happening"] = result["what_happening"][:77] + "..."
                         break
+
+            # Замена запрещённых англицизмов (LLM может игнорировать бан)
+            if result.get("what_happening"):
+                _banned = {
+                    "death cross": "тренд вниз",
+                    "golden cross": "тренд вверх",
+                    "short squeeze": "шорты в ловушке",
+                    "long squeeze": "лонги в ловушке",
+                }
+                wh = result["what_happening"]
+                for eng, rus in _banned.items():
+                    wh = wh.replace(eng, rus).replace(eng.title(), rus).replace(eng.upper(), rus)
+                result["what_happening"] = wh
 
             # Pipeline данные — rule-based (НЕ из LLM!)
             result["recommendation"] = pre_recommendation

@@ -245,7 +245,10 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     def _clean(v):
         return str(v).replace("**", "").replace("*", "").strip() if v else ""
 
-    what_happening = _clean(d.get("what_happening", "") or d.get("llm_text", ""))
+    what_happening = _clean(d.get("what_happening", ""))
+    # Принудительный лимит 80 символов (safety net — LLM может игнорировать лимит)
+    if what_happening and len(what_happening) > 80:
+        what_happening = what_happening[:77] + "..."
     trap           = _clean(d.get("trap", ""))
     recommendation = _clean(d.get("recommendation", ""))
     strength       = _clean(d.get("strength", ""))
