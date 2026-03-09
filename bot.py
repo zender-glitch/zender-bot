@@ -287,60 +287,50 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     lines.append("")
     lines.append("━━━ РЫНОК ━━━")
 
-    # Тренд: SMA50/SMA200
+    # Данные
     sma50_val = d.get("sma50", "—")
     sma200_val = d.get("sma200", "—")
     rsi_val = d.get("rsi", "—")
     macd_val = d.get("macd", "—")
     fr_val = d.get("funding_rate", "—")
+    oi_val = d.get("oi", "—")
     oi_chg = d.get("oi_change", "—")
     ob_ratio = d.get("bid_ask_ratio", "—")
+    long_p = d.get("long_pct", "—")
+    short_p = d.get("short_pct", "—")
+    fg = d.get("fear_greed", "—")
+    fg_lbl = d.get("fear_greed_label", "—")
+    bg_long_acc = d.get("bitget_long_acc", "—")
+    bg_short_acc = d.get("bitget_short_acc", "—")
 
     # Тренд
     if _has(sma50_val) and _has(sma200_val):
         try:
             s50 = float(str(sma50_val).replace("$", "").replace(",", ""))
             s200 = float(str(sma200_val).replace("$", "").replace(",", ""))
-            trend = "📈 вверх (golden cross)" if s50 > s200 else "📉 вниз (death cross)"
-        except (ValueError, TypeError):
-            trend = "—"
-        lines.append(f"📈 Тренд: {trend}")
-
-    # Покупатели / Order Book
-    if _has(ob_ratio):
-        try:
-            ratio_f = float(ob_ratio)
-            pct = int(ratio_f * 100)
-            if pct > 55:
-                ob_hint = "давят вверх"
-            elif pct < 45:
-                ob_hint = "давят вниз"
+            if s50 > s200:
+                lines.append("📈 Тренд: вверх")
             else:
-                ob_hint = "баланс"
-            lines.append(f"💪 Покупатели: {pct}% — {ob_hint}")
+                lines.append("📉 Тренд: вниз")
         except (ValueError, TypeError):
             pass
 
-    # Перепроданность / RSI
-    if _has(rsi_val):
+    # Лонг/Шорт ratio (Coinglass taker)
+    if _has(long_p) and _has(short_p):
         try:
-            rv = float(rsi_val)
-            if rv > 70:
-                rsi_hint = "сильная (перекуплен)"
-            elif rv > 60:
-                rsi_hint = "умеренная"
-            elif rv < 30:
-                rsi_hint = "сильная (перепродан)"
-            elif rv < 40:
-                rsi_hint = "умеренная"
+            lp = float(long_p)
+            sp = float(short_p)
+            if lp > 55:
+                ls_hint = "быки давят"
+            elif sp > 55:
+                ls_hint = "медведи давят"
             else:
-                rsi_hint = "нет (нейтрально)"
-            rsi_label = "Перекупленность" if rv > 55 else "Перепроданность"
-            lines.append(f"📉 {rsi_label}: {rsi_hint}")
+                ls_hint = "баланс"
+            lines.append(f"⚖️ Лонг/Шорт: {lp:.0f}% / {sp:.0f}% — {ls_hint}")
         except (ValueError, TypeError):
-            pass
+            lines.append(f"⚖️ Лонг/Шорт: {long_p}% / {short_p}%")
 
-    # Фандинг
+    # Фандинг с числом
     if _has(fr_val):
         try:
             fv = float(str(fr_val).replace("%", "").replace("+", ""))
@@ -350,13 +340,12 @@ def text_coin_analysis(coin: str, data: dict) -> str:
                 fr_hint = "шорты платят лонгам"
             else:
                 fr_hint = "баланс"
-            lines.append(f"💰 Фандинг: {fr_hint}")
+            lines.append(f"💰 Фандинг: {fr_val} — {fr_hint}")
         except (ValueError, TypeError):
-            pass
+            lines.append(f"💰 Фандинг: {fr_val}")
 
-    # Позиции / OI change
+    # Открытый интерес (OI)
     if _has(oi_chg):
-        oi_arrow = _arrow(oi_chg)
         try:
             oi_v = float(str(oi_chg).replace("%", "").replace("+", ""))
             if oi_v > 0.5:
@@ -365,23 +354,59 @@ def text_coin_analysis(coin: str, data: dict) -> str:
                 oi_hint = "падает"
             else:
                 oi_hint = "стабильно"
-            lines.append(f"📊 Позиции: объём {oi_hint} {oi_chg}")
+            lines.append(f"📊 Открытый интерес: {oi_chg} ({oi_hint})")
         except (ValueError, TypeError):
-            lines.append(f"📊 Позиции: {oi_chg}")
+            lines.append(f"📊 Открытый интерес: {oi_chg}")
 
-    # Биржи — cross-exchange consensus
+    # Состояние рынка (RSI)
+    if _has(rsi_val):
+        try:
+            rv = float(rsi_val)
+            if rv > 70:
+                rsi_hint = "перекуплен"
+            elif rv > 60:
+                rsi_hint = "разогрет"
+            elif rv < 30:
+                rsi_hint = "перепродан"
+            elif rv < 40:
+                rsi_hint = "охлаждается"
+            else:
+                rsi_hint = "норма"
+            lines.append(f"🌡 Состояние: {rsi_hint} (RSI {rv:.0f})")
+        except (ValueError, TypeError):
+            pass
+
+    # Эмоции рынка (Fear & Greed)
+    if _has(fg):
+        try:
+            fg_val = int(fg)
+            if fg_val <= 25:
+                fg_hint = "паника"
+            elif fg_val <= 45:
+                fg_hint = "страх"
+            elif fg_val <= 55:
+                fg_hint = "спокойствие"
+            elif fg_val <= 75:
+                fg_hint = "жадность"
+            else:
+                fg_hint = "эйфория"
+            lines.append(f"😰 Настроение рынка: {fg_hint} ({fg}/100)")
+        except (ValueError, TypeError):
+            pass
+
+    # Толпа — показываем ТОЛЬКО при сильном перекосе (>65%)
     bg_long_acc = d.get("bitget_long_acc", "—")
-    dx_funding = d.get("dydx_funding", "—")
-    kr_oi = d.get("kraken_oi", "—")
-    cross_parts = []
+    bg_short_acc = d.get("bitget_short_acc", "—")
     if _has(bg_long_acc):
-        cross_parts.append("Bitget")
-    if _has(dx_funding):
-        cross_parts.append("dYdX")
-    if _has(kr_oi):
-        cross_parts.append("Kraken")
-    if cross_parts:
-        lines.append(f"🌐 Биржи: {len(cross_parts)} источника данных")
+        try:
+            bg_l = float(bg_long_acc)
+            bg_s = float(bg_short_acc)
+            if bg_l > 65:
+                lines.append(f"👥 Толпа: {bg_l:.0f}% лонг — перекос")
+            elif bg_s > 65:
+                lines.append(f"👥 Толпа: {bg_s:.0f}% шорт — перекос")
+        except (ValueError, TypeError):
+            pass
 
     # ── УРОВНИ ──
     lines.append("")
@@ -391,10 +416,11 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     liq_up = d.get("liq_up", "—")
     liq_dn = d.get("liq_dn", "—")
     if _has(liq_up) or _has(liq_dn):
+        lines.append("💥 Ликвидации (1ч)")
         if _has(liq_up):
-            lines.append(f"💥 Ликвидации шортов: {liq_up}")
+            lines.append(f"шорты: {liq_up}")
         if _has(liq_dn):
-            lines.append(f"💥 Ликвидации лонгов: {liq_dn}")
+            lines.append(f"лонги: {liq_dn}")
 
     # Вход / Стоп / Цель
     if entry or stop or target:
