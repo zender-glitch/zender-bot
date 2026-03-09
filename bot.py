@@ -40,7 +40,7 @@ def kb_main():
     """Главная клавиатура"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📊 Сводка монет",    callback_data="summary"),
+            InlineKeyboardButton(text="📡 Радар рынка",     callback_data="radar"),
             InlineKeyboardButton(text="⚙️ Настройки",       callback_data="settings"),
         ],
         [
@@ -49,16 +49,33 @@ def kb_main():
         ],
     ])
 
-def kb_coins(coins: list[str]):
-    """Кнопки монет под сводкой"""
-    buttons = [InlineKeyboardButton(text=c, callback_data=f"coin_{c}") for c in coins]
-    rows = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+def kb_coin_buttons():
+    """Кнопки монет + обновить + радар"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=c, callback_data=f"coin_{c}") for c in COINS],
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh")],
+        [InlineKeyboardButton(text="📡 Радар рынка", callback_data="radar")],
+    ])
+
+def kb_coin_detail(coin: str):
+    """Кнопки под анализом монеты"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=c, callback_data=f"coin_{c}") for c in COINS],
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"coin_{coin}")],
+        [InlineKeyboardButton(text="📡 Радар рынка", callback_data="radar")],
+    ])
+
+def kb_radar():
+    """Кнопки под радаром"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=c, callback_data=f"coin_{c}") for c in COINS],
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="radar")],
+    ])
 
 def kb_back_to_summary():
     """Кнопка назад к сводке"""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀ Назад к сводке", callback_data="summary")]
+        [InlineKeyboardButton(text="◀ Назад к радару", callback_data="radar")]
     ])
 
 def kb_intervals():
@@ -136,347 +153,269 @@ def _has(val) -> bool:
     return s != "" and s != "—" and s != "0"
 
 
-def text_summary(user_coins: list[str], data: dict) -> str:
+def _rec_icon(rec: str) -> str:
+    """Иконка рекомендации"""
+    r = str(rec).lower()
+    if "покупать" in r:
+        return "🟢"
+    elif "продавать" in r:
+        return "🔴"
+    return "🟡"
+
+def _rec_label(rec: str) -> str:
+    """Лейбл рекомендации для радара"""
+    r = str(rec).lower()
+    if "покупать" in r:
+        return "ПОКУПАТЬ"
+    elif "продавать" in r:
+        return "ПРОДАВАТЬ"
+    return "ДЕРЖАТЬ"
+
+def _change_icon(change_str: str) -> str:
+    """Цветной кружок для изменения цены"""
+    s = str(change_str).strip()
+    if s.startswith("+") and s != "+0.00%":
+        return "🟢"
+    elif s.startswith("-") and s != "-0.00%":
+        return "🔴"
+    return "⚪"
+
+def text_radar(coins: list[str], data: dict) -> str:
     """
-    Компактная сводка по монетам — эталонный формат.
+    📡 РАДАР РЫНКА — компактный обзор всех монет.
     """
     lines = [
-        "⚡ <b>ZENDER TERMINAL</b>",
-        "",
-        "<b>ВАШИ МОНЕТЫ</b> · обновление каждые 15 мин",
+        "<b>📡 РАДАР РЫНКА</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
         "",
     ]
 
-    for coin in user_coins:
+    for coin in coins:
         d = data.get(coin, {})
         price  = d.get("price",  "—")
         change = d.get("change", "—")
-        signal = d.get("signal", "░░░░░")
-        label  = d.get("label",  "—")
-        arrow  = _arrow(change)
+        rec    = d.get("recommendation", "")
+        ch_icon = _change_icon(change)
+        r_icon  = _rec_icon(rec)
+        r_label = _rec_label(rec)
 
-        lines.append(f"{arrow} <code>{coin:<5} {str(price):>10}  {change:<9} {signal} {label}</code>")
+        lines.append(f"<code>{coin:<5}</code> {str(price):>10}   {ch_icon} <code>{change:<8}</code> {r_icon} {r_label}")
+
+    # Fear & Greed из BTC данных
+    btc = data.get("BTC", {})
+    fg = btc.get("fear_greed", "")
+    fg_label = btc.get("fear_greed_label", "")
+    if fg:
+        lines.append("")
+        try:
+            fg_val = int(fg)
+            if fg_val <= 25:
+                fg_emoji = "😱"
+            elif fg_val <= 45:
+                fg_emoji = "😰"
+            elif fg_val <= 55:
+                fg_emoji = "😐"
+            elif fg_val <= 75:
+                fg_emoji = "😏"
+            else:
+                fg_emoji = "🤑"
+        except (ValueError, TypeError):
+            fg_emoji = ""
+        lines.append(f"{fg_emoji} <b>Настроение рынка</b>")
+        lines.append(f"{fg_label} ({fg} из 100)")
 
     lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("⚡ <b>Zender Terminal</b>")
-    lines.append("t.me/ZenderTerminal_bot")
+    lines.append("Нажми монету для анализа ⬇")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+
     return "\n".join(lines)
 
 
 def text_coin_analysis(coin: str, data: dict) -> str:
     """
-    Полный анализ одной монеты — эталонный формат.
-    Показываем только секции с реальными данными.
-    Секции без данных скрываются.
-    + LLM-анализ, рекомендация, зоны покупки/продажи
-    + Общие рыночные ликвидации рядом с ликвидациями монеты
+    Компактный анализ монеты — новый терминальный формат.
+    ~20 строк вместо 40+. Понятный русский язык.
     """
     d = data.get(coin, {})
-    price   = d.get("price",       "—")
-    change  = d.get("change",      "—")
-    long_v  = d.get("long_vol",    "—")
-    long_p  = d.get("long_pct",    "—")
-    short_v = d.get("short_vol",   "—")
-    short_p = d.get("short_pct",   "—")
-    oi      = d.get("oi",          "—")
-    oi_chg  = d.get("oi_change",   "—")
-    fr      = d.get("funding_rate","—")
-    liq_up  = d.get("liq_up",      "—")
-    liq_dn  = d.get("liq_dn",      "—")
-    mkt_liq_long  = d.get("mkt_liq_long",  "—")
-    mkt_liq_short = d.get("mkt_liq_short", "—")
-    fg      = d.get("fear_greed",  "—")
-    fg_lbl  = d.get("fear_greed_label", "—")
-    signal  = d.get("signal",      "░░░░░")
-    sig_lbl = d.get("signal_label","—")
+    price  = d.get("price",  "—")
+    change = d.get("change", "—")
+    ch_icon = _change_icon(change)
 
-    # LLM данные
-    llm_text       = d.get("llm_text",        "")
-    recommendation = d.get("recommendation",   "")
-    buy_zone       = d.get("buy_zone",         "")
-    sell_zone      = d.get("sell_zone",        "")
+    # LLM данные (новый формат v8)
+    what_happening = d.get("what_happening", "") or d.get("llm_text", "")
+    trap           = d.get("trap", "")
+    recommendation = d.get("recommendation", "")
+    strength       = d.get("strength", "")
+    entry          = d.get("entry", "")
+    stop           = d.get("stop", "")
+    target         = d.get("target", "")
+    # Fallback на старый формат
+    buy_zone       = d.get("buy_zone", "")
+    sell_zone      = d.get("sell_zone", "")
 
-    arrow = _arrow(change)
+    rec_icon = _rec_icon(recommendation)
+    rec_label = _rec_label(recommendation)
+    strength_label = strength.upper() if strength else ""
 
     lines = [
-        "⚡ <b>ZENDER TERMINAL</b>",
+        f"<b>ZENDER TERMINAL · {coin}</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
         "",
-        f"<b>{coin} / USDT</b>          <code>{price}</code>   {arrow} <code>{change}</code>",
+        f"💰 <b>{price}</b>   {ch_icon} {change}",
     ]
 
-    # ── ЛОНГ / ШОРТ (taker buy/sell ratio) ──
-    if _has(long_p) or _has(short_p):
+    # ── ЧТО ПРОИСХОДИТ ──
+    if what_happening:
         lines.append("")
-        lines.append("<b>ЛОНГ / ШОРТ (1ч)</b>")
-        lines.append(f"🔺 <code>лонг    {long_p}</code>")
-        lines.append(f"🔻 <code>шорт    {short_p}</code>")
+        lines.append("<b>ЧТО ПРОИСХОДИТ</b>")
+        lines.append(html_lib.escape(what_happening))
 
-    # ── ОТКРЫТЫЙ ИНТЕРЕС ──
-    if _has(oi):
+    # ── ЛОВУШКА ──
+    if trap:
         lines.append("")
-        lines.append("<b>ОТКРЫТЫЙ ИНТЕРЕС</b>")
-        oi_icon = _arrow(oi_chg)
-        lines.append(f"<code>{oi}</code>    {oi_icon} <code>{oi_chg} за 1ч</code>")
-
-    # ── FUNDING RATE ──
-    if _has(fr):
-        lines.append("")
-        lines.append("<b>FUNDING RATE</b>")
-        try:
-            fr_val = float(fr.replace("%", "").replace("+", ""))
-            if fr_val > 0.01:
-                fr_hint = "лонги платят шортам (бычий перегрев)"
-            elif fr_val < -0.01:
-                fr_hint = "шорты платят лонгам (медвежий настрой)"
-            else:
-                fr_hint = "баланс"
-        except (ValueError, AttributeError):
-            fr_hint = ""
-        if fr_hint:
-            lines.append(f"<code>{fr}  → {fr_hint}</code>")
-        else:
-            lines.append(f"<code>{fr}</code>")
-
-    # ── ЛИКВИДАЦИИ (монета + рынок) ──
-    has_coin_liq = _has(liq_up) or _has(liq_dn)
-    has_mkt_liq  = _has(mkt_liq_long) or _has(mkt_liq_short)
-    if has_coin_liq or has_mkt_liq:
-        lines.append("")
-        lines.append("<b>ЛИКВИДАЦИИ (1ч)</b>")
-        if has_coin_liq:
-            lines.append(f"<code>  {coin}:</code>")
-            lines.append(f"<code>  ↑ шорты   {liq_up}</code>")
-            lines.append(f"<code>  ↓ лонги   {liq_dn}</code>")
-        if has_mkt_liq:
-            lines.append(f"<code>  РЫНОК:</code>")
-            lines.append(f"<code>  ↑ шорты   {mkt_liq_short}</code>")
-            lines.append(f"<code>  ↓ лонги   {mkt_liq_long}</code>")
-
-    # ── НАСТРОЕНИЕ ──
-    if _has(fg):
-        lines.append("")
-        lines.append("<b>НАСТРОЕНИЕ</b>")
-        try:
-            fg_val = int(fg)
-            if fg_val <= 25:
-                fg_icon = "😱"
-            elif fg_val <= 45:
-                fg_icon = "😟"
-            elif fg_val <= 55:
-                fg_icon = "😐"
-            elif fg_val <= 75:
-                fg_icon = "😏"
-            else:
-                fg_icon = "🤑"
-        except (ValueError, TypeError):
-            fg_icon = ""
-        lines.append(f"{fg_icon} <code>страх/жадность   {fg} — {fg_lbl}</code>")
-
-    # ── ТЕХН. ИНДИКАТОРЫ ──
-    rsi_val = d.get("rsi", "—")
-    macd_val = d.get("macd", "—")
-    sma50_val = d.get("sma50", "—")
-    sma200_val = d.get("sma200", "—")
-
-    has_tech = _has(rsi_val) or _has(macd_val)
-    if has_tech:
-        lines.append("")
-        lines.append("<b>ТЕХН. ИНДИКАТОРЫ</b>")
-        if _has(rsi_val):
-            try:
-                rv = float(rsi_val)
-                if rv > 70:
-                    rsi_hint = "перекуплен ⚠️"
-                elif rv < 30:
-                    rsi_hint = "перепродан 🔥"
-                elif rv > 60:
-                    rsi_hint = "бычья зона"
-                elif rv < 40:
-                    rsi_hint = "медвежья зона"
-                else:
-                    rsi_hint = "нейтрально"
-            except (ValueError, TypeError):
-                rsi_hint = ""
-            lines.append(f"<code>  📈 RSI       {rsi_val} — {rsi_hint}</code>")
-        if _has(macd_val):
-            try:
-                mv = float(macd_val)
-                macd_hint = "бычий" if mv > 0 else "медвежий"
-            except (ValueError, TypeError):
-                macd_hint = ""
-            lines.append(f"<code>  📉 MACD      {macd_val} — {macd_hint}</code>")
-        if _has(sma50_val) and _has(sma200_val):
-            try:
-                s50 = float(str(sma50_val).replace("$", "").replace(",", ""))
-                s200 = float(str(sma200_val).replace("$", "").replace(",", ""))
-                cross = "golden cross 🔺" if s50 > s200 else "death cross 🔻"
-            except (ValueError, TypeError):
-                cross = ""
-            lines.append(f"<code>  📊 SMA50     {sma50_val}</code>")
-            lines.append(f"<code>  📊 SMA200    {sma200_val}</code>")
-            if cross:
-                lines.append(f"<code>              {cross}</code>")
-
-    # ── ON-CHAIN ──
-    active_addr = d.get("active_addresses", "—")
-    active_addr_chg = d.get("active_addresses_change", "—")
-    exchange_reserve = d.get("exchange_reserve_btc", "—")
-    exchange_netflow = d.get("exchange_netflow_btc", "—")
-    sopr_val = d.get("sopr", "—")
-
-    has_onchain = _has(active_addr) or _has(exchange_reserve) or _has(sopr_val) or _has(exchange_netflow)
-    if has_onchain:
-        lines.append("")
-        lines.append("<b>ON-CHAIN</b>")
-        if _has(active_addr):
-            addr_arrow = _arrow(active_addr_chg)
-            lines.append(f"<code>  👥 адреса    {active_addr} {addr_arrow} {active_addr_chg}</code>")
-        if _has(exchange_reserve):
-            lines.append(f"<code>  🏦 резерв    {exchange_reserve} BTC</code>")
-        if _has(exchange_netflow):
-            try:
-                nf = float(str(exchange_netflow).replace(",", "").replace("+", ""))
-                if nf < 0:
-                    nf_hint = "📤 отток (бычий)"
-                elif nf > 0:
-                    nf_hint = "📥 приток (медвежий)"
-                else:
-                    nf_hint = "баланс"
-            except (ValueError, TypeError):
-                nf_hint = ""
-            lines.append(f"<code>  🔄 поток     {exchange_netflow} BTC</code>")
-            if nf_hint:
-                lines.append(f"<code>              {nf_hint}</code>")
-        if _has(sopr_val):
-            try:
-                sv = float(sopr_val)
-                sopr_hint = "прибыль" if sv > 1 else "убыток" if sv < 1 else "безубыток"
-            except (ValueError, TypeError):
-                sopr_hint = ""
-            lines.append(f"<code>  📊 SOPR      {sopr_val} — {sopr_hint}</code>")
-
-    # ── МАКРО ──
-    ahr999_val = d.get("ahr999", "—")
-    bull_peak = d.get("bull_peak_ratio", "—")
-    bubble_val = d.get("bitcoin_bubble", "—")
-    etf_val = d.get("etf_netflow", "—")
-    stablecoin_mcap_val = d.get("stablecoin_mcap", "—")
-    defi_tvl_val = d.get("defi_tvl", "—")
-    defi_tvl_chg = d.get("defi_tvl_change", "—")
-
-    has_macro = _has(ahr999_val) or _has(etf_val) or _has(stablecoin_mcap_val) or _has(defi_tvl_val) or _has(bull_peak)
-    if has_macro:
-        lines.append("")
-        lines.append("<b>МАКРО</b>")
-        if _has(ahr999_val):
-            try:
-                av = float(ahr999_val)
-                if av < 0.45:
-                    ahr_hint = "зона покупки 🔥"
-                elif av > 1.2:
-                    ahr_hint = "переоценён ⚠️"
-                else:
-                    ahr_hint = "нормальная зона"
-            except (ValueError, TypeError):
-                ahr_hint = ""
-            lines.append(f"<code>  📊 AHR999    {ahr999_val} — {ahr_hint}</code>")
-        if _has(bull_peak):
-            lines.append(f"<code>  🔝 Bull Peak {bull_peak} индикаторов</code>")
-        if _has(etf_val):
-            try:
-                ev_str = str(etf_val).replace("$", "").replace(",", "").strip()
-                ev = float(ev_str)
-                etf_hint = "📥 приток" if ev > 0 else "📤 отток"
-            except (ValueError, TypeError):
-                etf_hint = ""
-            lines.append(f"<code>  💰 BTC ETF   {etf_val} {etf_hint}</code>")
-        if _has(stablecoin_mcap_val):
-            lines.append(f"<code>  💵 Стейблы   {stablecoin_mcap_val}</code>")
-        if _has(defi_tvl_val):
-            tvl_arrow = _arrow(defi_tvl_chg)
-            lines.append(f"<code>  🏦 DeFi TVL  {defi_tvl_val} {tvl_arrow} {defi_tvl_chg}</code>")
-
-    # ── CROSS-EXCHANGE (Bitget + Kraken + dYdX) ──
-    bg_long_acc = d.get("bitget_long_acc", "—")
-    bg_short_acc = d.get("bitget_short_acc", "—")
-    bg_long_pos = d.get("bitget_long_pos", "—")
-    bg_short_pos = d.get("bitget_short_pos", "—")
-    bg_oi = d.get("bitget_oi_usd", "—")
-    kr_funding = d.get("kraken_funding", "—")
-    kr_oi = d.get("kraken_oi", "—")
-    dx_funding = d.get("dydx_funding", "—")
-    dx_oi = d.get("dydx_oi", "—")
-    # Order Book
-    ob_bids = d.get("bid_depth_usd", "—")
-    ob_asks = d.get("ask_depth_usd", "—")
-    ob_ratio = d.get("bid_ask_ratio", "—")
-
-    has_cross = _has(bg_long_acc) or _has(bg_long_pos) or _has(kr_oi) or _has(dx_funding) or _has(dx_oi) or _has(ob_ratio)
-    if has_cross:
-        lines.append("")
-        lines.append("<b>CROSS-EXCHANGE</b>")
-        if _has(bg_long_acc):
-            lines.append(f"<code>  🔵 Bitget Acc L {bg_long_acc} / S {bg_short_acc}</code>")
-        if _has(bg_long_pos):
-            lines.append(f"<code>  🔵 Bitget Pos L {bg_long_pos} / S {bg_short_pos}</code>")
-        if _has(bg_oi):
-            lines.append(f"<code>  📈 Bitget OI  {bg_oi}</code>")
-        if _has(kr_funding):
-            lines.append(f"<code>  🟠 Kraken FR  {kr_funding}</code>")
-        if _has(kr_oi):
-            lines.append(f"<code>  📈 Kraken OI  {kr_oi}</code>")
-        if _has(dx_funding):
-            lines.append(f"<code>  🟣 dYdX FR    {dx_funding}</code>")
-        if _has(dx_oi):
-            lines.append(f"<code>  📈 dYdX OI    {dx_oi}</code>")
-        # Order Book Imbalance
-        if _has(ob_ratio):
-            try:
-                ratio_f = float(ob_ratio)
-                bids_m = float(ob_bids) / 1e6
-                asks_m = float(ob_asks) / 1e6
-                ob_icon = "🟢" if ratio_f > 0.55 else "🔴" if ratio_f < 0.45 else "⚪"
-                lines.append(f"<code>  {ob_icon} Стакан   B ${bids_m:.1f}M / A ${asks_m:.1f}M ({ratio_f:.0%})</code>")
-            except (ValueError, TypeError):
-                pass
-
-    # ══════ ВЕРДИКТ (внизу, после всех метрик) ══════
+        lines.append(f"⚠️ <b>ЛОВУШКА</b>")
+        lines.append(html_lib.escape(trap))
 
     # ── СИГНАЛ ──
-    lines.append("")
-    lines.append(f"⚡ <code>СИГНАЛ   {signal}   {sig_lbl}</code>")
-
-    # ── LLM-АНАЛИЗ ──
-    if llm_text:
-        lines.append("")
-        lines.append(f"🤖 <b>AI-АНАЛИЗ</b>")
-        lines.append(html_lib.escape(llm_text))
-
-    # ── РЕКОМЕНДАЦИЯ + ЗОНЫ ──
     if recommendation:
-        rec_clean = recommendation.replace("*", "").replace("_", "").strip()
-        rec_upper = rec_clean.upper()
-        if "ПОКУПАТЬ" in rec_upper:
-            rec_icon = "🟢"
-        elif "ПРОДАВАТЬ" in rec_upper:
-            rec_icon = "🔴"
-        else:
-            rec_icon = "🟡"
         lines.append("")
-        lines.append(f"{rec_icon} <b>РЕКОМЕНДАЦИЯ:</b> {html_lib.escape(rec_clean)}")
+        sig_text = f"📊 <b>СИГНАЛ:</b> {rec_icon} {rec_label}"
+        if strength_label:
+            sig_text += f" ({strength_label})"
+        lines.append(sig_text)
 
-    if buy_zone or sell_zone:
+    lines.append("")
+    lines.append("━━━ РЫНОК ━━━")
+
+    # Тренд: SMA50/SMA200
+    sma50_val = d.get("sma50", "—")
+    sma200_val = d.get("sma200", "—")
+    rsi_val = d.get("rsi", "—")
+    macd_val = d.get("macd", "—")
+    fr_val = d.get("funding_rate", "—")
+    oi_chg = d.get("oi_change", "—")
+    ob_ratio = d.get("bid_ask_ratio", "—")
+
+    # Тренд
+    if _has(sma50_val) and _has(sma200_val):
+        try:
+            s50 = float(str(sma50_val).replace("$", "").replace(",", ""))
+            s200 = float(str(sma200_val).replace("$", "").replace(",", ""))
+            trend = "📈 вверх (golden cross)" if s50 > s200 else "📉 вниз (death cross)"
+        except (ValueError, TypeError):
+            trend = "—"
+        lines.append(f"📈 Тренд: {trend}")
+
+    # Покупатели / Order Book
+    if _has(ob_ratio):
+        try:
+            ratio_f = float(ob_ratio)
+            pct = int(ratio_f * 100)
+            if pct > 55:
+                ob_hint = "давят вверх"
+            elif pct < 45:
+                ob_hint = "давят вниз"
+            else:
+                ob_hint = "баланс"
+            lines.append(f"💪 Покупатели: {pct}% — {ob_hint}")
+        except (ValueError, TypeError):
+            pass
+
+    # Перепроданность / RSI
+    if _has(rsi_val):
+        try:
+            rv = float(rsi_val)
+            if rv > 70:
+                rsi_hint = "сильная (перекуплен)"
+            elif rv > 60:
+                rsi_hint = "умеренная"
+            elif rv < 30:
+                rsi_hint = "сильная (перепродан)"
+            elif rv < 40:
+                rsi_hint = "умеренная"
+            else:
+                rsi_hint = "нет (нейтрально)"
+            rsi_label = "Перекупленность" if rv > 55 else "Перепроданность"
+            lines.append(f"📉 {rsi_label}: {rsi_hint}")
+        except (ValueError, TypeError):
+            pass
+
+    # Фандинг
+    if _has(fr_val):
+        try:
+            fv = float(str(fr_val).replace("%", "").replace("+", ""))
+            if fv > 0.01:
+                fr_hint = "лонги платят шортам"
+            elif fv < -0.005:
+                fr_hint = "шорты платят лонгам"
+            else:
+                fr_hint = "баланс"
+            lines.append(f"💰 Фандинг: {fr_hint}")
+        except (ValueError, TypeError):
+            pass
+
+    # Позиции / OI change
+    if _has(oi_chg):
+        oi_arrow = _arrow(oi_chg)
+        try:
+            oi_v = float(str(oi_chg).replace("%", "").replace("+", ""))
+            if oi_v > 0.5:
+                oi_hint = "растёт"
+            elif oi_v < -0.5:
+                oi_hint = "падает"
+            else:
+                oi_hint = "стабильно"
+            lines.append(f"📊 Позиции: объём {oi_hint} {oi_chg}")
+        except (ValueError, TypeError):
+            lines.append(f"📊 Позиции: {oi_chg}")
+
+    # Биржи — cross-exchange consensus
+    bg_long_acc = d.get("bitget_long_acc", "—")
+    dx_funding = d.get("dydx_funding", "—")
+    kr_oi = d.get("kraken_oi", "—")
+    cross_parts = []
+    if _has(bg_long_acc):
+        cross_parts.append("Bitget")
+    if _has(dx_funding):
+        cross_parts.append("dYdX")
+    if _has(kr_oi):
+        cross_parts.append("Kraken")
+    if cross_parts:
+        lines.append(f"🌐 Биржи: {len(cross_parts)} источника данных")
+
+    # ── УРОВНИ ──
+    lines.append("")
+    lines.append("━━━ УРОВНИ ━━━")
+
+    # Ликвидации
+    liq_up = d.get("liq_up", "—")
+    liq_dn = d.get("liq_dn", "—")
+    if _has(liq_up) or _has(liq_dn):
+        if _has(liq_up):
+            lines.append(f"💥 Ликвидации шортов: {liq_up}")
+        if _has(liq_dn):
+            lines.append(f"💥 Ликвидации лонгов: {liq_dn}")
+
+    # Вход / Стоп / Цель
+    if entry or stop or target:
+        lines.append("")
+        if entry:
+            lines.append(f"🎯 Вход: {html_lib.escape(entry)}")
+        if stop:
+            lines.append(f"🛑 Стоп: {html_lib.escape(stop)}")
+        if target:
+            lines.append(f"✅ Цель: {html_lib.escape(target)}")
+    elif buy_zone or sell_zone:
+        # Fallback на старый формат зон
         lines.append("")
         if buy_zone:
-            lines.append(f"🔺 <code>Зона покупки:  {html_lib.escape(buy_zone)}</code>")
+            lines.append(f"🎯 Покупка: {html_lib.escape(buy_zone)}")
         if sell_zone:
-            lines.append(f"🔻 <code>Зона продажи:  {html_lib.escape(sell_zone)}</code>")
+            lines.append(f"✅ Продажа: {html_lib.escape(sell_zone)}")
 
     lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     lines.append("⚡ <b>Zender Terminal</b>")
-    lines.append("t.me/ZenderTerminal_bot")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
 
     return "\n".join(lines)
 
@@ -500,15 +439,13 @@ async def cmd_start(message: Message):
 
 @dp.message(Command("summary"))
 async def cmd_summary(message: Message):
-    """Сводка по монетам"""
-    user_id = message.from_user.id
-    # Тестовый режим: все монеты всем. После Telegram Payments — ограничить по тарифу.
+    """Радар рынка"""
     coins = COINS
     data  = await db.get_market_data(coins)
     await message.answer(
-        text_summary(coins, data),
+        text_radar(coins, data),
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_coins(coins)
+        reply_markup=kb_radar()
     )
 
 
@@ -553,27 +490,52 @@ async def cmd_status(message: Message):
 
 @dp.callback_query(F.data == "summary")
 async def cb_summary(call: CallbackQuery):
-    user_id = call.from_user.id
-    # Тестовый режим: все монеты всем
-    coins   = COINS
-    data    = await db.get_market_data(coins)
+    """Радар рынка (legacy callback)"""
+    coins = COINS
+    data  = await db.get_market_data(coins)
     await call.message.edit_text(
-        text_summary(coins, data),
+        text_radar(coins, data),
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_coins(coins)
+        reply_markup=kb_radar()
     )
     await call.answer()
 
 
+@dp.callback_query(F.data == "radar")
+async def cb_radar(call: CallbackQuery):
+    """📡 Радар рынка"""
+    coins = COINS
+    data  = await db.get_market_data(coins)
+    await call.message.edit_text(
+        text_radar(coins, data),
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_radar()
+    )
+    await call.answer()
+
+
+@dp.callback_query(F.data == "refresh")
+async def cb_refresh(call: CallbackQuery):
+    """🔄 Обновить радар"""
+    coins = COINS
+    data  = await db.get_market_data(coins)
+    await call.message.edit_text(
+        text_radar(coins, data),
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_radar()
+    )
+    await call.answer("🔄 Обновлено!")
+
+
 @dp.callback_query(F.data.startswith("coin_"))
 async def cb_coin(call: CallbackQuery):
-    """Полный анализ монеты по нажатию кнопки"""
+    """Компактный анализ монеты"""
     coin = call.data.replace("coin_", "")
     data = await db.get_market_data([coin])
     await call.message.edit_text(
         text_coin_analysis(coin, data),
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_back_to_summary()
+        reply_markup=kb_coin_detail(coin)
     )
     await call.answer()
 

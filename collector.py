@@ -1530,15 +1530,24 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
 
 ВАЖНО: Учитывай ВСЕ данные включая Order Book и Cross-Exchange! Стакан и мульти-биржевые данные — сильные сигналы.
 
-ПРАВИЛА ДЛЯ ЗОН (СТРОГО!):
-- Зона покупки ДОЛЖНА ВКЛЮЧАТЬ текущую цену! Формат: от (цена - 1-2%) до (цена + 0.5%)
-- Зона продажи = от (цена + 2-3%) до (цена + 4-5%)
-- НИКОГДА не давай зону покупки которая ПОЛНОСТЬЮ ниже текущей цены
+ПРАВИЛА ДЛЯ УРОВНЕЙ (СТРОГО!):
+- ВХОД: конкретная цена входа (текущая или чуть ниже для покупки, чуть выше для продажи)
+- СТОП: стоп-лосс (1-2% от входа в противоположную сторону)
+- ЦЕЛЬ: тейк-профит (2-4% от входа в сторону рекомендации)
 
-ОТВЕТЬ СТРОГО В ФОРМАТЕ (3 строки, без лишнего):
-АНАЛИЗ: [2-3 предложения простым языком — что происходит и почему]
-РЕКОМЕНДАЦИЯ: [одно слово: покупать / продавать / выжидать]
-ЗОНЫ: покупка $XXX,XXX–$XXX,XXX | продажа $XXX,XXX–$XXX,XXX"""
+ПРАВИЛА ДЛЯ ЛОВУШКИ:
+- "шорты в ловушке" если: Funding Rate отрицательный + ликвидации шортов рядом + покупатели давят в стакане
+- "лонги в ловушке" если: Funding Rate сильно положительный + ликвидации лонгов рядом + продавцы давят
+- "нет" если нет явных признаков ловушки
+
+ОТВЕТЬ СТРОГО В ФОРМАТЕ (каждая строка с новой строки, без лишнего):
+ЧТО_ПРОИСХОДИТ: [1-2 коротких предложения простым русским языком — что происходит на рынке прямо сейчас]
+ЛОВУШКА: [нет / шорты в ловушке / лонги в ловушке — если видишь дисбаланс позиций + ликвидации рядом]
+РЕКОМЕНДАЦИЯ: [покупать / продавать / выжидать]
+СИЛА: [сильно / умеренно / слабо]
+ВХОД: [$XXX,XXX — точка входа]
+СТОП: [$XXX,XXX — стоп-лосс]
+ЦЕЛЬ: [$XXX,XXX — тейк-профит]"""
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -1551,7 +1560,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
                 },
                 json={
                     "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 300,
+                    "max_tokens": 400,
                     "temperature": 0,
                     "messages": [{"role": "user", "content": prompt}],
                 }
@@ -1563,27 +1572,41 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             data = resp.json()
             text = data["content"][0]["text"].strip()
 
-            # Парсим ответ (гибкий парсинг — ловим разные форматы)
+            # Парсим ответ (гибкий парсинг — новый формат v8)
             result = {}
             for line in text.split("\n"):
                 clean = line.strip().lstrip("*").lstrip("#").strip()
                 upper = clean.upper()
+                val = clean.split(":", 1)[1].strip().replace("**", "").replace("__", "").replace("*", "").replace("_", "") if ":" in clean else ""
 
-                if upper.startswith("АНАЛИЗ:") or upper.startswith("АНАЛИЗ :"):
-                    val = clean.split(":", 1)[1].strip() if ":" in clean else ""
-                    val = val.replace("**", "").replace("__", "")  # убираем markdown bold
+                if upper.startswith("ЧТО_ПРОИСХОДИТ:") or upper.startswith("ЧТО ПРОИСХОДИТ:"):
                     if val:
-                        result["llm_text"] = val
+                        result["what_happening"] = val
+                elif upper.startswith("ЛОВУШКА:"):
+                    if val and val.lower() != "нет":
+                        result["trap"] = val
                 elif upper.startswith("РЕКОМЕНДАЦИЯ:") or upper.startswith("РЕКОМЕНДАЦИЯ :"):
-                    val = clean.split(":", 1)[1].strip().lower() if ":" in clean else ""
-                    # Убираем markdown звёздочки (**bold**) и подчёркивания
-                    val = val.replace("*", "").replace("_", "").strip()
                     if val:
-                        result["recommendation"] = val
+                        result["recommendation"] = val.lower().strip()
+                elif upper.startswith("СИЛА:"):
+                    if val:
+                        result["strength"] = val.lower().strip()
+                elif upper.startswith("ВХОД:"):
+                    if val:
+                        result["entry"] = val.strip()
+                elif upper.startswith("СТОП:"):
+                    if val:
+                        result["stop"] = val.strip()
+                elif upper.startswith("ЦЕЛЬ:"):
+                    if val:
+                        result["target"] = val.strip()
+                # Backward compat: старый формат
+                elif upper.startswith("АНАЛИЗ:") or upper.startswith("АНАЛИЗ :"):
+                    if val and not result.get("what_happening"):
+                        result["what_happening"] = val
                 elif upper.startswith("ЗОНЫ:") or upper.startswith("ЗОНЫ :"):
-                    val = clean.split(":", 1)[1].strip() if ":" in clean else ""
                     parts = val.split("|")
-                    if len(parts) >= 2:
+                    if len(parts) >= 2 and not result.get("entry"):
                         result["buy_zone"] = parts[0].replace("покупка", "").replace("Покупка", "").strip()
                         result["sell_zone"] = parts[1].replace("продажа", "").replace("Продажа", "").strip()
 
@@ -1597,13 +1620,16 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
                 elif "выжидать" in text_lower:
                     result["recommendation"] = "выжидать"
 
-            if not result.get("llm_text") and text:
-                # Берём первое осмысленное предложение как анализ
+            if not result.get("what_happening") and text:
                 for line in text.split("\n"):
                     clean = line.strip().lstrip("*").strip()
-                    if len(clean) > 20 and not clean.upper().startswith(("РЕКОМЕНДАЦИЯ", "ЗОНЫ")):
-                        result["llm_text"] = clean.split(":", 1)[1].strip() if ":" in clean and clean.upper().startswith("АНАЛИЗ") else clean
+                    if len(clean) > 20 and not clean.upper().startswith(("РЕКОМЕНДАЦИЯ", "ЗОНЫ", "СИЛА", "ВХОД", "СТОП", "ЦЕЛЬ", "ЛОВУШКА")):
+                        result["what_happening"] = clean.split(":", 1)[1].strip() if ":" in clean else clean
                         break
+
+            # Backward compat: llm_text для старого кода
+            if result.get("what_happening"):
+                result["llm_text"] = result["what_happening"]
 
             if result.get("llm_text"):
                 log.info(f"  🤖 LLM {symbol}: {result.get('recommendation', '?')}")
@@ -1997,7 +2023,13 @@ async def collect_all():
                 "label": signal_label,
                 "signal_label": signal_label,
                 "llm_text": llm_data.get("llm_text", ""),
+                "what_happening": llm_data.get("what_happening", ""),
+                "trap": llm_data.get("trap", ""),
                 "recommendation": llm_data.get("recommendation", ""),
+                "strength": llm_data.get("strength", ""),
+                "entry": llm_data.get("entry", ""),
+                "stop": llm_data.get("stop", ""),
+                "target": llm_data.get("target", ""),
                 "buy_zone": llm_data.get("buy_zone", ""),
                 "sell_zone": llm_data.get("sell_zone", ""),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
