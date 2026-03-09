@@ -397,27 +397,27 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             tvl_arrow = _arrow(defi_tvl_chg)
             lines.append(f"<code>  🏦 DeFi TVL  {defi_tvl_val} {tvl_arrow} {defi_tvl_chg}</code>")
 
-    # ── CROSS-EXCHANGE (Binance + Bybit) ──
-    bn_top_long = d.get("bn_top_long_acc", "—")
-    bn_top_short = d.get("bn_top_short_acc", "—")
-    bn_global_long = d.get("bn_global_long", "—")
-    bn_global_short = d.get("bn_global_short", "—")
-    bybit_long_val = d.get("bybit_long", "—")
-    bybit_short_val = d.get("bybit_short", "—")
-    bn_oi = d.get("bn_oi_qty", "—")
+    # ── CROSS-EXCHANGE (OKX + Bitget) ──
+    okx_long = d.get("okx_top_long", "—")
+    okx_short = d.get("okx_top_short", "—")
+    bg_long_acc = d.get("bitget_long_acc", "—")
+    bg_short_acc = d.get("bitget_short_acc", "—")
+    bg_long_pos = d.get("bitget_long_pos", "—")
+    bg_short_pos = d.get("bitget_short_pos", "—")
+    bg_oi = d.get("bitget_oi_usd", "—")
 
-    has_cross = _has(bn_top_long) or _has(bn_global_long) or _has(bybit_long_val)
+    has_cross = _has(okx_long) or _has(bg_long_acc) or _has(bg_long_pos)
     if has_cross:
         lines.append("")
         lines.append("<b>CROSS-EXCHANGE</b>")
-        if _has(bn_top_long):
-            lines.append(f"<code>  🏛 BN Top20%  L {bn_top_long} / S {bn_top_short}</code>")
-        if _has(bn_global_long):
-            lines.append(f"<code>  📊 BN All     L {bn_global_long} / S {bn_global_short}</code>")
-        if _has(bybit_long_val):
-            lines.append(f"<code>  🔷 Bybit      L {bybit_long_val} / S {bybit_short_val}</code>")
-        if _has(bn_oi):
-            lines.append(f"<code>  📈 BN OI      {bn_oi} контрактов</code>")
+        if _has(okx_long):
+            lines.append(f"<code>  🟠 OKX Top    L {okx_long} / S {okx_short}</code>")
+        if _has(bg_long_acc):
+            lines.append(f"<code>  🔵 Bitget Acc L {bg_long_acc} / S {bg_short_acc}</code>")
+        if _has(bg_long_pos):
+            lines.append(f"<code>  🔵 Bitget Pos L {bg_long_pos} / S {bg_short_pos}</code>")
+        if _has(bg_oi):
+            lines.append(f"<code>  📈 Bitget OI  {bg_oi}</code>")
 
     # ══════ ВЕРДИКТ (внизу, после всех метрик) ══════
 

@@ -23,11 +23,11 @@ except (ImportError, AttributeError):
     ANTHROPIC_KEY = None
     HAS_ANTHROPIC = False
 
-# Binance Futures API (бесплатно, без ключа, public endpoints)
-BINANCE_FUTURES_BASE = "https://fapi.binance.com"
+# OKX API v5 (бесплатно, без ключа, работает из US серверов)
+OKX_BASE = "https://www.okx.com"
 
-# Bybit API v5 (бесплатно, без ключа, public endpoints)
-BYBIT_BASE = "https://api.bybit.com"
+# Bitget API v2 (бесплатно, без ключа, работает из US серверов)
+BITGET_BASE = "https://api.bitget.com"
 
 # On-chain: бесплатные API (blockchain.info + BGeometrics + DeFiLlama), без ключа
 
@@ -637,110 +637,131 @@ async def fetch_defillama_data() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BINANCE + BYBIT (бесплатно, без ключа — cross-exchange данные)
+# OKX + BITGET (бесплатно, без ключа — работают из US серверов Railway)
 # ══════════════════════════════════════════════════════════════════════════════
 
 CROSS_EXCHANGE_CACHE = {}
 CROSS_EXCHANGE_TTL = 15 * 60  # 15 минут
 
 
-async def fetch_binance_top_trader_ls(symbol: str) -> dict:
+async def fetch_okx_ls(symbol: str) -> dict:
     """
-    Binance Futures: Top Trader Long/Short Ratio (аккаунты + позиции).
+    OKX: Long/Short Account Ratio (топ трейдеры).
     Бесплатно, без ключа, public endpoint.
-    Топ-20% трейдеров по балансу — ценный индикатор smart money.
     """
-    cache_key = f"binance_ls_{symbol}"
+    cache_key = f"okx_ls_{symbol}"
     if cache_key in CROSS_EXCHANGE_CACHE and (time.time() - CROSS_EXCHANGE_CACHE[cache_key]["ts"]) < CROSS_EXCHANGE_TTL:
         return CROSS_EXCHANGE_CACHE[cache_key]["data"]
 
     result = {}
-    pair = f"{symbol}USDT"
+    inst_id = f"{symbol}-USDT-SWAP"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            # Top Trader Account Ratio
+            # Top Traders L/S (аккаунты)
             resp_acc = await client.get(
-                f"{BINANCE_FUTURES_BASE}/futures/data/topLongShortAccountRatio",
-                params={"symbol": pair, "period": "1h", "limit": 1}
+                f"{OKX_BASE}/api/v5/rubik/stat/contracts/long-short-account-ratio",
+                params={"instId": inst_id, "period": "1H"}
             )
-            # Top Trader Position Ratio
+            # Top Traders L/S (позиции)
             resp_pos = await client.get(
-                f"{BINANCE_FUTURES_BASE}/futures/data/topLongShortPositionRatio",
-                params={"symbol": pair, "period": "1h", "limit": 1}
-            )
-            # Global Long/Short Account Ratio (все трейдеры)
-            resp_global = await client.get(
-                f"{BINANCE_FUTURES_BASE}/futures/data/globalLongShortAccountRatio",
-                params={"symbol": pair, "period": "1h", "limit": 1}
+                f"{OKX_BASE}/api/v5/rubik/stat/contracts/open-interest-volume",
+                params={"instId": inst_id, "period": "1H"}
             )
 
             if resp_acc.status_code == 200:
                 data = resp_acc.json()
-                if data and len(data) > 0:
-                    result["bn_top_long_acc"] = round(float(data[0].get("longAccount", 0)) * 100, 1)
-                    result["bn_top_short_acc"] = round(float(data[0].get("shortAccount", 0)) * 100, 1)
+                items = data.get("data", [])
+                if items:
+                    # [ts, longShortAccountRatio] — ratio > 1 значит больше лонгов
+                    ratio = float(items[0][1]) if len(items[0]) > 1 else None
+                    if ratio is not None:
+                        long_pct = round(ratio / (1 + ratio) * 100, 1)
+                        short_pct = round(100 - long_pct, 1)
+                        result["okx_top_long"] = long_pct
+                        result["okx_top_short"] = short_pct
 
             if resp_pos.status_code == 200:
                 data = resp_pos.json()
-                if data and len(data) > 0:
-                    result["bn_top_long_pos"] = round(float(data[0].get("longAccount", 0)) * 100, 1)
-                    result["bn_top_short_pos"] = round(float(data[0].get("shortAccount", 0)) * 100, 1)
-
-            if resp_global.status_code == 200:
-                data = resp_global.json()
-                if data and len(data) > 0:
-                    result["bn_global_long"] = round(float(data[0].get("longAccount", 0)) * 100, 1)
-                    result["bn_global_short"] = round(float(data[0].get("shortAccount", 0)) * 100, 1)
+                items = data.get("data", [])
+                if items and len(items[0]) >= 6:
+                    # [ts, oi, vol, oiUsd, volUsd, ...] - можем взять OI
+                    try:
+                        result["okx_oi"] = float(items[0][1])
+                    except (ValueError, IndexError):
+                        pass
 
             if result:
-                log.info(f"  📊 Binance {symbol}: TopAcc L/S={result.get('bn_top_long_acc','?')}%/{result.get('bn_top_short_acc','?')}% | Global L/S={result.get('bn_global_long','?')}%/{result.get('bn_global_short','?')}%")
+                log.info(f"  📊 OKX {symbol}: L/S={result.get('okx_top_long','?')}%/{result.get('okx_top_short','?')}%")
 
     except Exception as e:
-        log.warning(f"Binance LS {symbol} error: {e}")
+        log.warning(f"OKX LS {symbol} error: {e}")
 
     if result:
         CROSS_EXCHANGE_CACHE[cache_key] = {"data": result, "ts": time.time()}
     return result
 
 
-async def fetch_bybit_ls(symbol: str) -> dict:
+async def fetch_bitget_ls(symbol: str) -> dict:
     """
-    Bybit API v5: Long/Short Ratio (account ratio).
-    Бесплатно, без ключа, public endpoint.
+    Bitget: Long/Short Account Ratio + Position Ratio.
+    Бесплатно, без ключа, public endpoint. 1 req/s rate limit.
     """
-    cache_key = f"bybit_ls_{symbol}"
+    cache_key = f"bitget_ls_{symbol}"
     if cache_key in CROSS_EXCHANGE_CACHE and (time.time() - CROSS_EXCHANGE_CACHE[cache_key]["ts"]) < CROSS_EXCHANGE_TTL:
         return CROSS_EXCHANGE_CACHE[cache_key]["data"]
 
     result = {}
+    pair = f"{symbol}USDT"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{BYBIT_BASE}/v5/market/account-ratio",
-                params={"category": "linear", "symbol": f"{symbol}USDT", "period": "1h", "limit": 1}
+            # Account Long/Short Ratio
+            resp_acc = await client.get(
+                f"{BITGET_BASE}/api/v2/mix/market/account-long-short",
+                params={"symbol": pair, "productType": "USDT-FUTURES", "period": "1h"}
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                items = data.get("result", {}).get("list", [])
+            # Задержка (rate limit 1/s)
+            await asyncio.sleep(1.1)
+            # Position Long/Short Ratio
+            resp_pos = await client.get(
+                f"{BITGET_BASE}/api/v2/mix/market/position-long-short",
+                params={"symbol": pair, "productType": "USDT-FUTURES", "period": "1h"}
+            )
+
+            if resp_acc.status_code == 200:
+                data = resp_acc.json()
+                items = data.get("data", [])
                 if items:
-                    result["bybit_long"] = round(float(items[0].get("buyRatio", 0)) * 100, 1)
-                    result["bybit_short"] = round(float(items[0].get("sellRatio", 0)) * 100, 1)
-                    log.info(f"  📊 Bybit {symbol}: L/S={result['bybit_long']}%/{result['bybit_short']}%")
+                    lr = float(items[0].get("longAccountRatio", 0))
+                    sr = float(items[0].get("shortAccountRatio", 0))
+                    result["bitget_long_acc"] = round(lr * 100, 1)
+                    result["bitget_short_acc"] = round(sr * 100, 1)
+
+            if resp_pos.status_code == 200:
+                data = resp_pos.json()
+                items = data.get("data", [])
+                if items:
+                    lr = float(items[0].get("longPositionRatio", 0))
+                    sr = float(items[0].get("shortPositionRatio", 0))
+                    result["bitget_long_pos"] = round(lr * 100, 1)
+                    result["bitget_short_pos"] = round(sr * 100, 1)
+
+            if result:
+                log.info(f"  📊 Bitget {symbol}: AccL/S={result.get('bitget_long_acc','?')}%/{result.get('bitget_short_acc','?')}% | PosL/S={result.get('bitget_long_pos','?')}%/{result.get('bitget_short_pos','?')}%")
 
     except Exception as e:
-        log.warning(f"Bybit LS {symbol} error: {e}")
+        log.warning(f"Bitget LS {symbol} error: {e}")
 
     if result:
         CROSS_EXCHANGE_CACHE[cache_key] = {"data": result, "ts": time.time()}
     return result
 
 
-async def fetch_binance_oi(symbol: str) -> dict:
+async def fetch_bitget_oi(symbol: str) -> dict:
     """
-    Binance Futures: Open Interest + OI history (для сравнения с Coinglass).
-    Бесплатно, без ключа.
+    Bitget: Open Interest.
+    Бесплатно, без ключа. Для сравнения с Coinglass.
     """
-    cache_key = f"binance_oi_{symbol}"
+    cache_key = f"bitget_oi_{symbol}"
     if cache_key in CROSS_EXCHANGE_CACHE and (time.time() - CROSS_EXCHANGE_CACHE[cache_key]["ts"]) < CROSS_EXCHANGE_TTL:
         return CROSS_EXCHANGE_CACHE[cache_key]["data"]
 
@@ -749,17 +770,20 @@ async def fetch_binance_oi(symbol: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
-                f"{BINANCE_FUTURES_BASE}/fapi/v1/openInterest",
-                params={"symbol": pair}
+                f"{BITGET_BASE}/api/v2/mix/market/open-interest",
+                params={"symbol": pair, "productType": "USDT-FUTURES"}
             )
             if resp.status_code == 200:
                 data = resp.json()
-                oi_qty = float(data.get("openInterest", 0))
-                result["bn_oi_qty"] = oi_qty
-                log.info(f"  📊 Binance OI {symbol}: {oi_qty:,.2f} контрактов")
+                oi_data = data.get("data", {})
+                if oi_data:
+                    oi_val = float(oi_data.get("openInterestUsd", 0))
+                    if oi_val > 0:
+                        result["bitget_oi_usd"] = oi_val
+                        log.info(f"  📊 Bitget OI {symbol}: ${oi_val/1e6:.1f}M")
 
     except Exception as e:
-        log.warning(f"Binance OI {symbol} error: {e}")
+        log.warning(f"Bitget OI {symbol} error: {e}")
 
     if result:
         CROSS_EXCHANGE_CACHE[cache_key] = {"data": result, "ts": time.time()}
@@ -937,16 +961,14 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     stablecoin_mcap = coin_data.get("stablecoin_mcap")
     defi_tvl = coin_data.get("defi_tvl")
     defi_tvl_change = coin_data.get("defi_tvl_change")
-    # Cross-exchange данные (Binance + Bybit)
-    bn_top_long_acc = coin_data.get("bn_top_long_acc")
-    bn_top_short_acc = coin_data.get("bn_top_short_acc")
-    bn_top_long_pos = coin_data.get("bn_top_long_pos")
-    bn_top_short_pos = coin_data.get("bn_top_short_pos")
-    bn_global_long = coin_data.get("bn_global_long")
-    bn_global_short = coin_data.get("bn_global_short")
-    bybit_long = coin_data.get("bybit_long")
-    bybit_short = coin_data.get("bybit_short")
-    bn_oi_qty = coin_data.get("bn_oi_qty")
+    # Cross-exchange данные (OKX + Bitget)
+    okx_top_long = coin_data.get("okx_top_long")
+    okx_top_short = coin_data.get("okx_top_short")
+    bitget_long_acc = coin_data.get("bitget_long_acc")
+    bitget_short_acc = coin_data.get("bitget_short_acc")
+    bitget_long_pos = coin_data.get("bitget_long_pos")
+    bitget_short_pos = coin_data.get("bitget_short_pos")
+    bitget_oi_usd = coin_data.get("bitget_oi_usd")
 
     # Блок on-chain + технических данных для промпта
     onchain_block = ""
@@ -998,20 +1020,18 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             tvl_hint = f" ({'+' if defi_tvl_change > 0 else ''}{defi_tvl_change:.1f}% за день)" if defi_tvl_change else ""
             onchain_lines.append(f"- DeFi TVL: ${defi_tvl/1e9:.1f}B{tvl_hint}")
 
-    # Cross-exchange блок (Binance + Bybit vs Coinglass)
-    if any([bn_top_long_acc, bn_global_long, bybit_long]):
-        onchain_lines.append(f"\nCROSS-EXCHANGE ДАННЫЕ:")
-        if bn_top_long_acc is not None:
-            hint = "топ трейдеры в лонгах" if bn_top_long_acc > 55 else "топ трейдеры в шортах" if bn_top_long_acc < 45 else "баланс"
-            onchain_lines.append(f"- Binance Top Traders (аккаунты): L {bn_top_long_acc}% / S {bn_top_short_acc}% — {hint}")
-        if bn_top_long_pos is not None:
-            onchain_lines.append(f"- Binance Top Traders (позиции): L {bn_top_long_pos}% / S {bn_top_short_pos}%")
-        if bn_global_long is not None:
-            onchain_lines.append(f"- Binance все трейдеры: L {bn_global_long}% / S {bn_global_short}%")
-        if bybit_long is not None:
-            onchain_lines.append(f"- Bybit все трейдеры: L {bybit_long}% / S {bybit_short}%")
-        if bn_oi_qty:
-            onchain_lines.append(f"- Binance OI: {bn_oi_qty:,.2f} контрактов")
+    # Cross-exchange блок (OKX + Bitget vs Coinglass)
+    if any([okx_top_long, bitget_long_acc, bitget_long_pos]):
+        onchain_lines.append(f"\nCROSS-EXCHANGE ДАННЫЕ (OKX + Bitget):")
+        if okx_top_long is not None:
+            hint = "топ трейдеры в лонгах" if okx_top_long > 55 else "топ трейдеры в шортах" if okx_top_long < 45 else "баланс"
+            onchain_lines.append(f"- OKX Top Traders: L {okx_top_long}% / S {okx_top_short}% — {hint}")
+        if bitget_long_acc is not None:
+            onchain_lines.append(f"- Bitget (аккаунты): L {bitget_long_acc}% / S {bitget_short_acc}%")
+        if bitget_long_pos is not None:
+            onchain_lines.append(f"- Bitget (позиции): L {bitget_long_pos}% / S {bitget_short_pos}%")
+        if bitget_oi_usd:
+            onchain_lines.append(f"- Bitget OI: ${bitget_oi_usd/1e6:.1f}M")
 
     if onchain_lines:
         onchain_block = "\n".join(onchain_lines)
@@ -1279,19 +1299,18 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
         if bull_peak_pct > 60:
             bear += 1  # более 60% индикаторов пика сработали
 
-    # 14. Cross-Exchange: Binance Top Traders vs рынок
-    bn_top_long = coin_data.get("bn_top_long_acc")
-    bn_global_l = coin_data.get("bn_global_long")
-    if bn_top_long is not None:
-        if bn_top_long > 55:
-            bull += 1  # топ трейдеры Binance в лонгах (smart money)
-        elif bn_top_long < 45:
-            bear += 1  # топ трейдеры Binance в шортах (smart money)
+    # 14. Cross-Exchange: OKX Top Traders (smart money)
+    okx_top_l = coin_data.get("okx_top_long")
+    if okx_top_l is not None:
+        if okx_top_l > 55:
+            bull += 1  # топ трейдеры OKX в лонгах (smart money)
+        elif okx_top_l < 45:
+            bear += 1  # топ трейдеры OKX в шортах (smart money)
 
-    # 15. Cross-Exchange consensus: Binance global + Bybit agree
-    bybit_l = coin_data.get("bybit_long")
-    if bn_global_l is not None and bybit_l is not None:
-        avg_long = (bn_global_l + bybit_l) / 2
+    # 15. Cross-Exchange consensus: OKX + Bitget agree
+    bitget_l = coin_data.get("bitget_long_acc")
+    if okx_top_l is not None and bitget_l is not None:
+        avg_long = (okx_top_l + bitget_l) / 2
         if avg_long > 55:
             bull += 1  # обе биржи в лонгах
         elif avg_long < 45:
@@ -1406,11 +1425,11 @@ async def collect_all():
             # On-chain данные (бесплатно, без ключа)
             gn_data = await fetch_onchain_data(symbol)
 
-            # Cross-exchange данные: Binance + Bybit (бесплатно, без ключа)
-            bn_ls_data, bybit_ls_data, bn_oi_data = await asyncio.gather(
-                fetch_binance_top_trader_ls(symbol),
-                fetch_bybit_ls(symbol),
-                fetch_binance_oi(symbol),
+            # Cross-exchange данные: OKX + Bitget (бесплатно, без ключа, работают из US)
+            okx_data, bitget_ls_data, bitget_oi_data = await asyncio.gather(
+                fetch_okx_ls(symbol),
+                fetch_bitget_ls(symbol),
+                fetch_bitget_oi(symbol),
             )
 
             # Объединяем все данные
@@ -1424,9 +1443,9 @@ async def collect_all():
                 **gn_data,
                 **cg_indicators,      # Bull Market Peak, AHR999, Bubble, ETF
                 **defillama_data,     # Stablecoin mcap, DeFi TVL
-                **bn_ls_data,         # Binance Top Trader L/S + Global L/S
-                **bybit_ls_data,      # Bybit L/S ratio
-                **bn_oi_data,         # Binance OI
+                **okx_data,           # OKX Top Trader L/S
+                **bitget_ls_data,     # Bitget Account + Position L/S
+                **bitget_oi_data,     # Bitget OI
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -1470,13 +1489,13 @@ async def collect_all():
                 "sma50": fmt_price(coin_data.get("sma50")),
                 "sma200": fmt_price(coin_data.get("sma200")),
                 "exchange_flow": "—",
-                "bn_top_long_acc": f"{coin_data.get('bn_top_long_acc', '—')}%" if coin_data.get("bn_top_long_acc") is not None else "—",
-                "bn_top_short_acc": f"{coin_data.get('bn_top_short_acc', '—')}%" if coin_data.get("bn_top_short_acc") is not None else "—",
-                "bn_global_long": f"{coin_data.get('bn_global_long', '—')}%" if coin_data.get("bn_global_long") is not None else "—",
-                "bn_global_short": f"{coin_data.get('bn_global_short', '—')}%" if coin_data.get("bn_global_short") is not None else "—",
-                "bybit_long": f"{coin_data.get('bybit_long', '—')}%" if coin_data.get("bybit_long") is not None else "—",
-                "bybit_short": f"{coin_data.get('bybit_short', '—')}%" if coin_data.get("bybit_short") is not None else "—",
-                "bn_oi_qty": f"{coin_data['bn_oi_qty']:,.2f}" if coin_data.get("bn_oi_qty") else "—",
+                "okx_top_long": f"{coin_data.get('okx_top_long', '—')}%" if coin_data.get("okx_top_long") is not None else "—",
+                "okx_top_short": f"{coin_data.get('okx_top_short', '—')}%" if coin_data.get("okx_top_short") is not None else "—",
+                "bitget_long_acc": f"{coin_data.get('bitget_long_acc', '—')}%" if coin_data.get("bitget_long_acc") is not None else "—",
+                "bitget_short_acc": f"{coin_data.get('bitget_short_acc', '—')}%" if coin_data.get("bitget_short_acc") is not None else "—",
+                "bitget_long_pos": f"{coin_data.get('bitget_long_pos', '—')}%" if coin_data.get("bitget_long_pos") is not None else "—",
+                "bitget_short_pos": f"{coin_data.get('bitget_short_pos', '—')}%" if coin_data.get("bitget_short_pos") is not None else "—",
+                "bitget_oi_usd": fmt_usd(coin_data.get("bitget_oi_usd")) if coin_data.get("bitget_oi_usd") else "—",
                 "stablecoin_mcap": fmt_usd(coin_data.get("stablecoin_mcap")) if coin_data.get("stablecoin_mcap") else "—",
                 "defi_tvl": fmt_usd(coin_data.get("defi_tvl")) if coin_data.get("defi_tvl") else "—",
                 "defi_tvl_change": fmt_pct(coin_data.get("defi_tvl_change")),
