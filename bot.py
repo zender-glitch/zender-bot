@@ -407,8 +407,12 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     kr_oi = d.get("kraken_oi", "—")
     dx_funding = d.get("dydx_funding", "—")
     dx_oi = d.get("dydx_oi", "—")
+    # Order Book
+    ob_bids = d.get("bid_depth_usd", "—")
+    ob_asks = d.get("ask_depth_usd", "—")
+    ob_ratio = d.get("bid_ask_ratio", "—")
 
-    has_cross = _has(bg_long_acc) or _has(bg_long_pos) or _has(kr_oi) or _has(dx_funding) or _has(dx_oi)
+    has_cross = _has(bg_long_acc) or _has(bg_long_pos) or _has(kr_oi) or _has(dx_funding) or _has(dx_oi) or _has(ob_ratio)
     if has_cross:
         lines.append("")
         lines.append("<b>CROSS-EXCHANGE</b>")
@@ -426,6 +430,16 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             lines.append(f"<code>  🟣 dYdX FR    {dx_funding}</code>")
         if _has(dx_oi):
             lines.append(f"<code>  📈 dYdX OI    {dx_oi}</code>")
+        # Order Book Imbalance
+        if _has(ob_ratio):
+            try:
+                ratio_f = float(ob_ratio)
+                bids_m = float(ob_bids) / 1e6
+                asks_m = float(ob_asks) / 1e6
+                ob_icon = "🟢" if ratio_f > 0.55 else "🔴" if ratio_f < 0.45 else "⚪"
+                lines.append(f"<code>  {ob_icon} Стакан   B ${bids_m:.1f}M / A ${asks_m:.1f}M ({ratio_f:.0%})</code>")
+            except (ValueError, TypeError):
+                pass
 
     # ══════ ВЕРДИКТ (внизу, после всех метрик) ══════
 

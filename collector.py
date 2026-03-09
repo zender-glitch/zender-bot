@@ -1066,6 +1066,64 @@ async def fetch_kraken_futures(symbol: str) -> dict:
     return result
 
 
+# ── Kraken Order Book (Bid/Ask Imbalance) ─────────────────────────────────
+
+KRAKEN_OB_CACHE = {}
+KRAKEN_OB_CACHE_TTL = 5 * 60  # 5 минут — order book меняется быстро
+
+
+async def fetch_kraken_orderbook(symbol: str) -> dict:
+    """
+    Kraken Futures Order Book — Bid/Ask Imbalance.
+    Показывает перекос стакана: кто давит — покупатели или продавцы.
+    Бесплатно, без ключа. Поддерживает: BTC, ETH, SOL.
+    """
+    if symbol not in KRAKEN_FUTURES_SYMBOLS:
+        return {}
+
+    cache_key = f"kraken_ob_{symbol}"
+    if cache_key in KRAKEN_OB_CACHE and (time.time() - KRAKEN_OB_CACHE[cache_key]["ts"]) < KRAKEN_OB_CACHE_TTL:
+        return KRAKEN_OB_CACHE[cache_key]["data"]
+
+    result = {}
+    ticker = KRAKEN_FUTURES_SYMBOLS[symbol]
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{KRAKEN_FUTURES_BASE}/orderbook",
+                params={"symbol": ticker}
+            )
+            if resp.status_code != 200:
+                log.warning(f"Kraken OB {symbol} HTTP {resp.status_code}")
+                return {}
+            data = resp.json()
+            ob = data.get("orderBook", {})
+            bids = ob.get("bids", [])  # [[price, qty], ...]
+            asks = ob.get("asks", [])
+
+            if bids and asks:
+                # Суммируем объём в USD: price × qty для топ-20 уровней
+                bid_depth = sum(b[0] * b[1] for b in bids[:20]) if len(bids) >= 20 else sum(b[0] * b[1] for b in bids)
+                ask_depth = sum(a[0] * a[1] for a in asks[:20]) if len(asks) >= 20 else sum(a[0] * a[1] for a in asks)
+
+                result["bid_depth_usd"] = bid_depth
+                result["ask_depth_usd"] = ask_depth
+
+                # Imbalance: >0.5 = покупатели давят, <0.5 = продавцы давят
+                total = bid_depth + ask_depth
+                if total > 0:
+                    result["bid_ask_ratio"] = round(bid_depth / total, 3)
+
+                log.info(f"  📕 Kraken OB {symbol}: Bids ${bid_depth/1e6:.1f}M | Asks ${ask_depth/1e6:.1f}M | Ratio={result.get('bid_ask_ratio', '?')}")
+
+    except Exception as e:
+        log.warning(f"Kraken OB {symbol} error: {e}")
+
+    if result:
+        KRAKEN_OB_CACHE[cache_key] = {"data": result, "ts": time.time()}
+    return result
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # dYdX v4 INDEXER (бесплатно, без ключа, DEX — нет гео-блокировки)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1320,6 +1378,10 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     kraken_oi = coin_data.get("kraken_oi")
     dydx_funding = coin_data.get("dydx_funding")
     dydx_oi = coin_data.get("dydx_oi")
+    # Order Book (Bid/Ask Imbalance)
+    bid_depth = coin_data.get("bid_depth_usd")
+    ask_depth = coin_data.get("ask_depth_usd")
+    bid_ask_ratio = coin_data.get("bid_ask_ratio")
 
     # Блок on-chain + технических данных для промпта
     onchain_block = ""
@@ -1372,7 +1434,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             onchain_lines.append(f"- DeFi TVL: ${defi_tvl/1e9:.1f}B{tvl_hint}")
 
     # Cross-exchange блок (Bitget + Kraken + dYdX vs Coinglass)
-    if any([bitget_long_acc, bitget_long_pos, kraken_funding, dydx_funding]):
+    if any([bitget_long_acc, bitget_long_pos, kraken_funding, dydx_funding, bid_ask_ratio]):
         onchain_lines.append(f"\nCROSS-EXCHANGE ДАННЫЕ (мульти-биржевое сравнение):")
         if bitget_long_acc is not None:
             hint = "ритейл в лонгах" if bitget_long_acc > 60 else "ритейл в шортах" if bitget_long_acc < 40 else "баланс"
@@ -1392,6 +1454,19 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             onchain_lines.append(f"- dYdX (DEX) FR: {dydx_funding:.4f}% — {dx_hint}")
         if dydx_oi is not None:
             onchain_lines.append(f"- dYdX OI: {dydx_oi:,.0f}")
+
+    # Order Book Imbalance (Kraken Futures)
+    if bid_ask_ratio is not None and bid_depth is not None:
+        onchain_lines.append(f"\nORDER BOOK (Kraken Futures — глубина стакана):")
+        onchain_lines.append(f"- Bids (покупки): ${bid_depth/1e6:.1f}M")
+        onchain_lines.append(f"- Asks (продажи): ${ask_depth/1e6:.1f}M")
+        if bid_ask_ratio > 0.55:
+            ob_hint = "ПОКУПАТЕЛИ давят — сильная поддержка снизу"
+        elif bid_ask_ratio < 0.45:
+            ob_hint = "ПРОДАВЦЫ давят — давление сверху"
+        else:
+            ob_hint = "баланс покупателей/продавцов"
+        onchain_lines.append(f"- Bid/Ask Ratio: {bid_ask_ratio:.1%} — {ob_hint}")
 
     if onchain_lines:
         onchain_block = "\n".join(onchain_lines)
@@ -1827,12 +1902,13 @@ async def collect_all():
             # Технические индикаторы (RSI, MACD, SMA — для не-BTC монет, из CoinGecko истории)
             tech_data = await fetch_tech_indicators(symbol)
 
-            # Cross-exchange данные: Bitget + Kraken + dYdX (бесплатно, без ключа)
-            bitget_ls_data, bitget_oi_data, kraken_data, dydx_data = await asyncio.gather(
+            # Cross-exchange данные: Bitget + Kraken + dYdX + Order Book (бесплатно, без ключа)
+            bitget_ls_data, bitget_oi_data, kraken_data, dydx_data, ob_data = await asyncio.gather(
                 fetch_bitget_ls(symbol),
                 fetch_bitget_oi(symbol),
                 fetch_kraken_futures(symbol),
                 fetch_dydx_data(symbol),
+                fetch_kraken_orderbook(symbol),
             )
 
             # Объединяем все данные
@@ -1848,8 +1924,9 @@ async def collect_all():
                 **defillama_data,     # Stablecoin mcap, DeFi TVL
                 **bitget_ls_data,     # Bitget Account + Position L/S
                 **bitget_oi_data,     # Bitget OI
-                **kraken_data,        # Kraken Futures: funding + OI
+                **kraken_data,        # Kraken Futures: OI
                 **dydx_data,          # dYdX: funding + OI
+                **ob_data,            # Kraken Order Book: bid/ask imbalance
                 **tech_data,          # RSI, MACD, SMA50, SMA200 (для не-BTC монет)
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
@@ -1903,6 +1980,9 @@ async def collect_all():
                 "kraken_oi": str(round(coin_data["kraken_oi"])) if coin_data.get("kraken_oi") else "—",
                 "dydx_funding": fmt_fr(coin_data.get("dydx_funding")),
                 "dydx_oi": str(round(coin_data["dydx_oi"])) if coin_data.get("dydx_oi") else "—",
+                "bid_depth_usd": str(round(coin_data["bid_depth_usd"])) if coin_data.get("bid_depth_usd") else "—",
+                "ask_depth_usd": str(round(coin_data["ask_depth_usd"])) if coin_data.get("ask_depth_usd") else "—",
+                "bid_ask_ratio": str(round(coin_data["bid_ask_ratio"], 3)) if coin_data.get("bid_ask_ratio") else "—",
                 "stablecoin_mcap": fmt_usd(coin_data.get("stablecoin_mcap")) if coin_data.get("stablecoin_mcap") else "—",
                 "defi_tvl": fmt_usd(coin_data.get("defi_tvl")) if coin_data.get("defi_tvl") else "—",
                 "defi_tvl_change": fmt_pct(coin_data.get("defi_tvl_change")),
