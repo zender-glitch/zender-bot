@@ -23,10 +23,8 @@ except (ImportError, AttributeError):
     ANTHROPIC_KEY = None
     HAS_ANTHROPIC = False
 
-# OKX API v5 (бесплатно, без ключа, работает из US серверов)
-OKX_BASE = "https://www.okx.com"
-
-# Bitget API v2 (бесплатно, без ключа, работает из US серверов)
+# Bitget API v2 (бесплатно, без ключа, работает из US серверов Railway)
+# OKX — НЕ работает из US (400 Bad Request), убран
 BITGET_BASE = "https://api.bitget.com"
 
 # On-chain: бесплатные API (blockchain.info + BGeometrics + DeFiLlama), без ключа
@@ -637,75 +635,27 @@ async def fetch_defillama_data() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# OKX + BITGET (бесплатно, без ключа — работают из US серверов Railway)
+# BITGET (бесплатно, без ключа — работает из US серверов Railway)
+# OKX, Binance, Bybit — ВСЕ блокируют US серверы (451/403/400)
 # ══════════════════════════════════════════════════════════════════════════════
 
 CROSS_EXCHANGE_CACHE = {}
 CROSS_EXCHANGE_TTL = 15 * 60  # 15 минут
 
 
-async def fetch_okx_ls(symbol: str) -> dict:
-    """
-    OKX: Long/Short Account Ratio (топ трейдеры).
-    Бесплатно, без ключа, public endpoint.
-    """
-    cache_key = f"okx_ls_{symbol}"
-    if cache_key in CROSS_EXCHANGE_CACHE and (time.time() - CROSS_EXCHANGE_CACHE[cache_key]["ts"]) < CROSS_EXCHANGE_TTL:
-        return CROSS_EXCHANGE_CACHE[cache_key]["data"]
-
-    result = {}
-    inst_id = f"{symbol}-USDT-SWAP"
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            # Top Traders L/S (аккаунты)
-            resp_acc = await client.get(
-                f"{OKX_BASE}/api/v5/rubik/stat/contracts/long-short-account-ratio",
-                params={"instId": inst_id, "period": "1H"}
-            )
-            # Top Traders L/S (позиции)
-            resp_pos = await client.get(
-                f"{OKX_BASE}/api/v5/rubik/stat/contracts/open-interest-volume",
-                params={"instId": inst_id, "period": "1H"}
-            )
-
-            if resp_acc.status_code == 200:
-                data = resp_acc.json()
-                items = data.get("data", [])
-                if items:
-                    # [ts, longShortAccountRatio] — ratio > 1 значит больше лонгов
-                    ratio = float(items[0][1]) if len(items[0]) > 1 else None
-                    if ratio is not None:
-                        long_pct = round(ratio / (1 + ratio) * 100, 1)
-                        short_pct = round(100 - long_pct, 1)
-                        result["okx_top_long"] = long_pct
-                        result["okx_top_short"] = short_pct
-
-            if resp_pos.status_code == 200:
-                data = resp_pos.json()
-                items = data.get("data", [])
-                if items and len(items[0]) >= 6:
-                    # [ts, oi, vol, oiUsd, volUsd, ...] - можем взять OI
-                    try:
-                        result["okx_oi"] = float(items[0][1])
-                    except (ValueError, IndexError):
-                        pass
-
-            if result:
-                log.info(f"  📊 OKX {symbol}: L/S={result.get('okx_top_long','?')}%/{result.get('okx_top_short','?')}%")
-
-    except Exception as e:
-        log.warning(f"OKX LS {symbol} error: {e}")
-
-    if result:
-        CROSS_EXCHANGE_CACHE[cache_key] = {"data": result, "ts": time.time()}
-    return result
+# Пары которые поддерживают L/S на Bitget (BNB, AVAX — не поддерживаются)
+BITGET_LS_SUPPORTED = {"BTC", "ETH", "SOL"}
 
 
 async def fetch_bitget_ls(symbol: str) -> dict:
     """
     Bitget: Long/Short Account Ratio + Position Ratio.
     Бесплатно, без ключа, public endpoint. 1 req/s rate limit.
+    Поддерживает: BTC, ETH, SOL. BNB/AVAX — нет L/S данных.
     """
+    if symbol not in BITGET_LS_SUPPORTED:
+        return {}
+
     cache_key = f"bitget_ls_{symbol}"
     if cache_key in CROSS_EXCHANGE_CACHE and (time.time() - CROSS_EXCHANGE_CACHE[cache_key]["ts"]) < CROSS_EXCHANGE_TTL:
         return CROSS_EXCHANGE_CACHE[cache_key]["data"]
@@ -961,9 +911,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
     stablecoin_mcap = coin_data.get("stablecoin_mcap")
     defi_tvl = coin_data.get("defi_tvl")
     defi_tvl_change = coin_data.get("defi_tvl_change")
-    # Cross-exchange данные (OKX + Bitget)
-    okx_top_long = coin_data.get("okx_top_long")
-    okx_top_short = coin_data.get("okx_top_short")
+    # Cross-exchange данные (Bitget)
     bitget_long_acc = coin_data.get("bitget_long_acc")
     bitget_short_acc = coin_data.get("bitget_short_acc")
     bitget_long_pos = coin_data.get("bitget_long_pos")
@@ -1020,16 +968,15 @@ async def generate_llm_analysis(symbol: str, coin_data: dict) -> dict:
             tvl_hint = f" ({'+' if defi_tvl_change > 0 else ''}{defi_tvl_change:.1f}% за день)" if defi_tvl_change else ""
             onchain_lines.append(f"- DeFi TVL: ${defi_tvl/1e9:.1f}B{tvl_hint}")
 
-    # Cross-exchange блок (OKX + Bitget vs Coinglass)
-    if any([okx_top_long, bitget_long_acc, bitget_long_pos]):
-        onchain_lines.append(f"\nCROSS-EXCHANGE ДАННЫЕ (OKX + Bitget):")
-        if okx_top_long is not None:
-            hint = "топ трейдеры в лонгах" if okx_top_long > 55 else "топ трейдеры в шортах" if okx_top_long < 45 else "баланс"
-            onchain_lines.append(f"- OKX Top Traders: L {okx_top_long}% / S {okx_top_short}% — {hint}")
+    # Cross-exchange блок (Bitget vs Coinglass)
+    if any([bitget_long_acc, bitget_long_pos]):
+        onchain_lines.append(f"\nCROSS-EXCHANGE ДАННЫЕ (Bitget — сравнение с Coinglass L/S):")
         if bitget_long_acc is not None:
-            onchain_lines.append(f"- Bitget (аккаунты): L {bitget_long_acc}% / S {bitget_short_acc}%")
+            hint = "ритейл в лонгах" if bitget_long_acc > 60 else "ритейл в шортах" if bitget_long_acc < 40 else "баланс"
+            onchain_lines.append(f"- Bitget аккаунты: L {bitget_long_acc}% / S {bitget_short_acc}% — {hint}")
         if bitget_long_pos is not None:
-            onchain_lines.append(f"- Bitget (позиции): L {bitget_long_pos}% / S {bitget_short_pos}%")
+            hint_pos = "позиции в лонгах" if bitget_long_pos > 55 else "позиции в шортах" if bitget_long_pos < 45 else "баланс"
+            onchain_lines.append(f"- Bitget позиции: L {bitget_long_pos}% / S {bitget_short_pos}% — {hint_pos}")
         if bitget_oi_usd:
             onchain_lines.append(f"- Bitget OI: ${bitget_oi_usd/1e6:.1f}M")
 
@@ -1299,22 +1246,24 @@ def calculate_signal(coin_data: dict) -> tuple[str, str]:
         if bull_peak_pct > 60:
             bear += 1  # более 60% индикаторов пика сработали
 
-    # 14. Cross-Exchange: OKX Top Traders (smart money)
-    okx_top_l = coin_data.get("okx_top_long")
-    if okx_top_l is not None:
-        if okx_top_l > 55:
-            bull += 1  # топ трейдеры OKX в лонгах (smart money)
-        elif okx_top_l < 45:
-            bear += 1  # топ трейдеры OKX в шортах (smart money)
+    # 14. Cross-Exchange: Bitget Account L/S (ритейл настроение)
+    bitget_acc_l = coin_data.get("bitget_long_acc")
+    if bitget_acc_l is not None:
+        # Контр-индикатор: если ритейл массово в лонгах — медвежий сигнал
+        if bitget_acc_l > 70:
+            bear += 1  # ритейл перегрет в лонгах (контр-индикатор)
+        elif bitget_acc_l < 35:
+            bull += 1  # ритейл массово в шортах (контр-индикатор — покупай)
 
-    # 15. Cross-Exchange consensus: OKX + Bitget agree
-    bitget_l = coin_data.get("bitget_long_acc")
-    if okx_top_l is not None and bitget_l is not None:
-        avg_long = (okx_top_l + bitget_l) / 2
-        if avg_long > 55:
-            bull += 1  # обе биржи в лонгах
-        elif avg_long < 45:
-            bear += 1  # обе биржи в шортах
+    # 15. Cross-Exchange: Bitget Position L/S vs Coinglass L/S divergence
+    bitget_pos_l = coin_data.get("bitget_long_pos")
+    cg_long_pct = coin_data.get("long_pct")
+    if bitget_pos_l is not None and cg_long_pct is not None:
+        # Если Bitget и Coinglass согласны — сильный сигнал
+        if bitget_pos_l > 55 and cg_long_pct > 55:
+            bull += 1  # обе платформы: позиции в лонгах
+        elif bitget_pos_l < 45 and cg_long_pct < 45:
+            bear += 1  # обе платформы: позиции в шортах
 
     # Сила = максимум из бычьих/медвежьих
     strength = max(bull, bear)
@@ -1425,9 +1374,8 @@ async def collect_all():
             # On-chain данные (бесплатно, без ключа)
             gn_data = await fetch_onchain_data(symbol)
 
-            # Cross-exchange данные: OKX + Bitget (бесплатно, без ключа, работают из US)
-            okx_data, bitget_ls_data, bitget_oi_data = await asyncio.gather(
-                fetch_okx_ls(symbol),
+            # Cross-exchange данные: Bitget (бесплатно, без ключа, работает из US)
+            bitget_ls_data, bitget_oi_data = await asyncio.gather(
                 fetch_bitget_ls(symbol),
                 fetch_bitget_oi(symbol),
             )
@@ -1443,7 +1391,6 @@ async def collect_all():
                 **gn_data,
                 **cg_indicators,      # Bull Market Peak, AHR999, Bubble, ETF
                 **defillama_data,     # Stablecoin mcap, DeFi TVL
-                **okx_data,           # OKX Top Trader L/S
                 **bitget_ls_data,     # Bitget Account + Position L/S
                 **bitget_oi_data,     # Bitget OI
                 "mkt_liq_long": total_liq_long_1h,
@@ -1489,8 +1436,6 @@ async def collect_all():
                 "sma50": fmt_price(coin_data.get("sma50")),
                 "sma200": fmt_price(coin_data.get("sma200")),
                 "exchange_flow": "—",
-                "okx_top_long": f"{coin_data.get('okx_top_long', '—')}%" if coin_data.get("okx_top_long") is not None else "—",
-                "okx_top_short": f"{coin_data.get('okx_top_short', '—')}%" if coin_data.get("okx_top_short") is not None else "—",
                 "bitget_long_acc": f"{coin_data.get('bitget_long_acc', '—')}%" if coin_data.get("bitget_long_acc") is not None else "—",
                 "bitget_short_acc": f"{coin_data.get('bitget_short_acc', '—')}%" if coin_data.get("bitget_short_acc") is not None else "—",
                 "bitget_long_pos": f"{coin_data.get('bitget_long_pos', '—')}%" if coin_data.get("bitget_long_pos") is not None else "—",

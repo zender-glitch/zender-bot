@@ -397,21 +397,17 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             tvl_arrow = _arrow(defi_tvl_chg)
             lines.append(f"<code>  🏦 DeFi TVL  {defi_tvl_val} {tvl_arrow} {defi_tvl_chg}</code>")
 
-    # ── CROSS-EXCHANGE (OKX + Bitget) ──
-    okx_long = d.get("okx_top_long", "—")
-    okx_short = d.get("okx_top_short", "—")
+    # ── CROSS-EXCHANGE (Bitget) ──
     bg_long_acc = d.get("bitget_long_acc", "—")
     bg_short_acc = d.get("bitget_short_acc", "—")
     bg_long_pos = d.get("bitget_long_pos", "—")
     bg_short_pos = d.get("bitget_short_pos", "—")
     bg_oi = d.get("bitget_oi_usd", "—")
 
-    has_cross = _has(okx_long) or _has(bg_long_acc) or _has(bg_long_pos)
+    has_cross = _has(bg_long_acc) or _has(bg_long_pos)
     if has_cross:
         lines.append("")
         lines.append("<b>CROSS-EXCHANGE</b>")
-        if _has(okx_long):
-            lines.append(f"<code>  🟠 OKX Top    L {okx_long} / S {okx_short}</code>")
         if _has(bg_long_acc):
             lines.append(f"<code>  🔵 Bitget Acc L {bg_long_acc} / S {bg_short_acc}</code>")
         if _has(bg_long_pos):
