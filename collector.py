@@ -462,11 +462,14 @@ async def fetch_cg_indicators():
     Bull Market Peak, AHR999, Bitcoin Bubble Index, ETF flows.
     Эти эндпоинты могут быть доступны на STARTUP ($95/мес).
     """
+    # ПРИМЕЧАНИЕ: все 4 эндпоинта возвращают 404 на STARTUP ($95/мес).
+    # Доступны только на PROFESSIONAL ($195/мес+).
+    # Оставляем код на будущее, но пока пропускаем чтобы не тратить запросы.
     endpoints = {
-        "bull_market_peak": "/api/indicator/bull-market-peak",
-        "ahr999": "/api/indicator/ahr999",
-        "bitcoin_bubble": "/api/indicator/bitcoin-bubble-index",
-        "btc_etf": "/api/bitcoin-etf/list",
+        # "bull_market_peak": "/api/indicator/bull-market-peak",  # 404 на STARTUP
+        # "ahr999": "/api/indicator/ahr999",                      # 404 на STARTUP
+        # "bitcoin_bubble": "/api/indicator/bitcoin-bubble-index", # 404 на STARTUP
+        # "btc_etf": "/api/bitcoin-etf/list",                     # 404 на STARTUP
     }
 
     for name, path in endpoints.items():

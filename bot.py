@@ -205,60 +205,6 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         f"<b>{coin} / USDT</b>          <code>{price}</code>   {arrow} <code>{change}</code>",
     ]
 
-    # ══════ БЛОК 1: САМОЕ ВАЖНОЕ СВЕРХУ ══════
-
-    # ── СИГНАЛ ──
-    lines.append("")
-    lines.append(f"⚡ <code>СИГНАЛ   {signal}   {sig_lbl}</code>")
-
-    # ── РЕКОМЕНДАЦИЯ + ЗОНЫ ──
-    if recommendation:
-        rec_clean = recommendation.replace("*", "").replace("_", "").strip()
-        rec_upper = rec_clean.upper()
-        if "ПОКУПАТЬ" in rec_upper:
-            rec_icon = "🟢"
-        elif "ПРОДАВАТЬ" in rec_upper:
-            rec_icon = "🔴"
-        else:
-            rec_icon = "🟡"
-        lines.append("")
-        lines.append(f"{rec_icon} <b>РЕКОМЕНДАЦИЯ:</b> {html_lib.escape(rec_clean)}")
-
-    if buy_zone or sell_zone:
-        lines.append("")
-        if buy_zone:
-            lines.append(f"🔺 <code>Зона покупки:  {html_lib.escape(buy_zone)}</code>")
-        if sell_zone:
-            lines.append(f"🔻 <code>Зона продажи:  {html_lib.escape(sell_zone)}</code>")
-
-    # ── AI-АНАЛИЗ ──
-    if llm_text:
-        lines.append("")
-        lines.append(f"🤖 <b>AI-АНАЛИЗ</b>")
-        lines.append(html_lib.escape(llm_text))
-
-    # ══════ БЛОК 2: ДАННЫЕ ══════
-
-    # ── НАСТРОЕНИЕ ──
-    if _has(fg):
-        lines.append("")
-        lines.append("<b>НАСТРОЕНИЕ</b>")
-        try:
-            fg_val = int(fg)
-            if fg_val <= 25:
-                fg_icon = "😱"
-            elif fg_val <= 45:
-                fg_icon = "😟"
-            elif fg_val <= 55:
-                fg_icon = "😐"
-            elif fg_val <= 75:
-                fg_icon = "😏"
-            else:
-                fg_icon = "🤑"
-        except (ValueError, TypeError):
-            fg_icon = ""
-        lines.append(f"{fg_icon} <code>страх/жадность   {fg} — {fg_lbl}</code>")
-
     # ── ЛОНГ / ШОРТ (taker buy/sell ratio) ──
     if _has(long_p) or _has(short_p):
         lines.append("")
@@ -306,6 +252,26 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             lines.append(f"<code>  РЫНОК:</code>")
             lines.append(f"<code>  ↑ шорты   {mkt_liq_short}</code>")
             lines.append(f"<code>  ↓ лонги   {mkt_liq_long}</code>")
+
+    # ── НАСТРОЕНИЕ ──
+    if _has(fg):
+        lines.append("")
+        lines.append("<b>НАСТРОЕНИЕ</b>")
+        try:
+            fg_val = int(fg)
+            if fg_val <= 25:
+                fg_icon = "😱"
+            elif fg_val <= 45:
+                fg_icon = "😟"
+            elif fg_val <= 55:
+                fg_icon = "😐"
+            elif fg_val <= 75:
+                fg_icon = "😏"
+            else:
+                fg_icon = "🤑"
+        except (ValueError, TypeError):
+            fg_icon = ""
+        lines.append(f"{fg_icon} <code>страх/жадность   {fg} — {fg_lbl}</code>")
 
     # ── ТЕХН. ИНДИКАТОРЫ ──
     rsi_val = d.get("rsi", "—")
@@ -446,6 +412,38 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             lines.append(f"<code>  📥 на биржи   {whale_to} (медвежий)</code>")
         if _has(whale_from):
             lines.append(f"<code>  📤 с бирж     {whale_from} (бычий)</code>")
+
+    # ══════ ВЕРДИКТ (внизу, после всех метрик) ══════
+
+    # ── СИГНАЛ ──
+    lines.append("")
+    lines.append(f"⚡ <code>СИГНАЛ   {signal}   {sig_lbl}</code>")
+
+    # ── LLM-АНАЛИЗ ──
+    if llm_text:
+        lines.append("")
+        lines.append(f"🤖 <b>AI-АНАЛИЗ</b>")
+        lines.append(html_lib.escape(llm_text))
+
+    # ── РЕКОМЕНДАЦИЯ + ЗОНЫ ──
+    if recommendation:
+        rec_clean = recommendation.replace("*", "").replace("_", "").strip()
+        rec_upper = rec_clean.upper()
+        if "ПОКУПАТЬ" in rec_upper:
+            rec_icon = "🟢"
+        elif "ПРОДАВАТЬ" in rec_upper:
+            rec_icon = "🔴"
+        else:
+            rec_icon = "🟡"
+        lines.append("")
+        lines.append(f"{rec_icon} <b>РЕКОМЕНДАЦИЯ:</b> {html_lib.escape(rec_clean)}")
+
+    if buy_zone or sell_zone:
+        lines.append("")
+        if buy_zone:
+            lines.append(f"🔺 <code>Зона покупки:  {html_lib.escape(buy_zone)}</code>")
+        if sell_zone:
+            lines.append(f"🔻 <code>Зона продажи:  {html_lib.escape(sell_zone)}</code>")
 
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
