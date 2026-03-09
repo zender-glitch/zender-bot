@@ -1716,16 +1716,21 @@ async def collect_all():
 
     # Технические индикаторы для не-BTC монет (CoinGecko история, кэш 30мин)
     # Загружаем ПОСЛЕ цен, с паузами, чтобы не сбить CoinGecko rate limit
-    # Пауза 8с между запросами + 10с после цен
+    # Preload максимум 2 монеты за цикл — остальные подхватятся при обработке монет
+    # (CoinGecko free tier даёт ~5-6 req/min, после 2 history запросов 3-й часто получает 429)
     await asyncio.sleep(10)  # Пауза после запроса цен
+    preload_count = 0
     for coin in COINS:
         if coin == "BTC":
             continue  # BTC получает из BGeometrics
+        if preload_count >= 2:
+            break  # Макс 2 preload запроса, остальные при обработке монеты
         cache_key = f"tech_{coin}"
         if cache_key in TECH_CACHE and (time.time() - TECH_CACHE[cache_key]["ts"]) < TECH_CACHE_TTL:
-            continue  # Кэш актуален
+            continue  # Кэш актуален — не считаем за preload
         await fetch_tech_indicators(coin)
-        await asyncio.sleep(8)  # Пауза 8с между запросами CoinGecko
+        preload_count += 1
+        await asyncio.sleep(10)  # Пауза 10с между запросами CoinGecko
 
     # Ликвидации — 1 запрос на все монеты
     liq_all = await cg_get("/api/futures/liquidation/coin-list")
