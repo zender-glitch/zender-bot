@@ -1671,6 +1671,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
     lines.append("t.me/ZenderTerminal_bot")
+    disclaimer = "⚠️ Не является финансовым советом" if lang == "ru" else "⚠️ Not financial advice"
+    lines.append(f"<i>{disclaimer}</i>")
 
     return "\n".join(lines)
 
@@ -1850,6 +1852,8 @@ def text_options_detail(coin: str, data: dict, lang: str = "ru", ai_text: str = 
 
     lines.append("⚡ <b>Zender Terminal</b>")
     lines.append("@ZenderTerminalBot")
+    disclaimer = "⚠️ Не является финансовым советом" if lang == "ru" else "⚠️ Not financial advice"
+    lines.append(f"<i>{disclaimer}</i>")
 
     return "\n".join(lines)
 
