@@ -229,22 +229,33 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
         "faq_btn_signals": "📊 Сигналы",
         "faq_btn_whales": "🐋 Киты",
         "faq_btn_options": "📈 Опционы",
+        "faq_btn_orderflow": "📊 Order Flow",
+        "faq_btn_liquidity": "🔥 Ликвидации",
+        "faq_btn_structure": "🏗 Структура",
         "faq_btn_ai": "🤖 AI-анализ",
         "faq_btn_data": "📡 Данные",
         "faq_btn_plans": "💰 Тарифы",
 
         "faq_signals": """<b>📊 Что такое сигналы?</b>
 
-Сигнал — это итог анализа 30+ показателей рынка. Алгоритм оценивает:
+Сигнал — это итог анализа 30+ показателей рынка через 3-слойный pipeline.
 
-<b>Направление</b> — куда давят деньги прямо сейчас (вверх / вниз / боковик). Смотрит на funding rate, long/short ratio, объём покупок/продаж, ликвидации.
+<b>Слой 1: Направление</b> — куда давят деньги (вверх / вниз / боковик). Учитывает 9 факторов: funding rate, long/short, CVD, киты, MACD и др.
 
-<b>Сила сигнала</b> — сколько факторов совпадают:
+<b>Слой 2: Состояние рынка</b> — фаза: short squeeze, паника, накопление, распределение, боковик.
+
+<b>Слой 3: Качество сетапа</b> — насколько хороший момент для входа (сильный / средний / слабый / плохой).
+
+<b>Сила сигнала:</b>
 🟩⬜⬜⬜⬜ слабый — мало подтверждений
 🟩🟩🟩⬜⬜ средний — большинство совпадает
 🟩🟩🟩🟩🟩 сильный — всё в одну сторону
 
-<b>Рекомендация</b> — покупать / продавать / выжидать. Основана на правилах, не на мнении.
+<b>Вероятность движения</b> — % на рост vs падение. Считается из соотношения бычьих/медвежьих факторов + качества сетапа.
+
+<b>⚠️ Ловушки</b>
+«Шорты в ловушке» — шортисты переплатили (funding отрицательный), их ликвидируют. Возможен short squeeze — резкий рост из-за каскадных ликвидаций шортов.
+«Лонги в ловушке» — лонгисты перегружены, возможен long squeeze — резкое падение.
 
 ⚠️ Это не финансовый совет. Всегда проверяй сам.""",
 
@@ -277,7 +288,72 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
 • 30-60% — нормально
 • &gt; 60% — ожидают резкое движение
 
-<b>Экспирации</b> — даты истечения опционов. Крупная экспирация = повышенная волатильность.""",
+<b>Экспирации</b> — даты истечения опционов. Крупная экспирация = повышенная волатильность.
+
+<b>Option Bias</b> — наш индикатор настроения опционного рынка (Bullish/Bearish %). Считается из PCR + положения цены относительно Max Pain.
+
+<b>🎯 Магнит цены (Target Magnet)</b> — уровень Max Pain. Перед экспирацией маркетмейкеры заинтересованы сдвинуть цену к Max Pain, чтобы максимум опционов сгорел.""",
+
+        "faq_orderflow": """<b>📊 Order Flow — поток ордеров</b>
+
+Показывает РЕАЛЬНОЕ давление покупателей и продавцов, а не просто движение цены.
+
+<b>CVD (Cumulative Volume Delta)</b> — разница между рыночными покупками и продажами за 1 час.
+• CVD +42M — покупатели агрессивно купили на $42M больше, чем продали продавцы
+• CVD -55M — продавцы давят
+• Цена растёт, но CVD падает = ложный рост, возможна ловушка
+• Цена стоит, но CVD растёт = кто-то тихо набирает позицию
+
+<b>Стакан (Order Book)</b>
+🟢 Покупки / 🔴 Продажи — объём лимитных ордеров в стакане.
+
+<b>Стены (Walls)</b>
+🟩 Стена покупок — крупный лимитный ордер на покупку. Поддержка цены.
+🟥 Стена продаж — крупный лимитный ордер на продажу. Сопротивление.
+
+Если стена покупок на $82,400 ($4.2M) — маркетмейкер не хочет, чтобы цена упала ниже этого уровня.
+
+Данные: Binance Futures (бесплатно, обновление каждые 2-5 мин).""",
+
+        "faq_liquidity": """<b>🔥 Карта ликвидаций</b>
+
+Показывает КУДА маркетмейкеры могут двинуть цену за ликвидностью.
+
+<b>Как это работает:</b>
+Большинство трейдеров используют плечи 10x-25x. При падении на 5% все лонги с 20x плечом ликвидируются. Эти ликвидации — как магнит для цены.
+
+<b>Что показываем:</b>
+🔥 $86,200 — стопы шортов (выше цены). Если цена дойдёт сюда, шорты начнут ликвидироваться каскадно, толкая цену ещё выше.
+🔥 $78,100 — стопы лонгов (ниже цены). Если цена упадёт сюда, лонги начнут ликвидироваться, толкая цену ещё ниже.
+
+<b>Почему это важно:</b>
+Маркетмейкеры знают, где стоят стопы. Часто цена "ходит за ликвидностью" — сначала снимает стопы с одной стороны, потом разворачивается. Это называется "ликвидационный магнит".
+
+<b>Также показываем:</b>
+💥 Ликвидации за 1ч — сколько денег было ликвидировано у лонгов vs шортов. Если ликвидируют больше шортов — давление вверх, и наоборот.
+
+Расчёт: на основе текущей цены, популярных плечей (10x-25x) и соотношения лонг/шорт.""",
+
+        "faq_structure": """<b>🏗 Структура рынка — Spot vs Perp</b>
+
+Показывает КТО двигает рынок: реальные покупатели или деривативные трейдеры.
+
+<b>Spot Volume</b> — объём реальных покупок/продаж на спотовом рынке. Это когда кто-то реально покупает BTC за доллары.
+
+<b>Perp Volume</b> — объём торгов на фьючерсах (perpetual). Это когда трейдеры торгуют с плечом, но не покупают реальный BTC.
+
+<b>Spot Dominance</b> — какой % от общего объёма составляет спот.
+• Spot &gt; 50% — рост поддержан реальными покупками, тренд устойчивый
+• Perp &gt; 70% — рынок двигают деривативы, движение нестабильное
+
+<b>Почему это важно:</b>
+Если BTC растёт на $3K, но 80% объёма — это perp, значит рост основан на плечах и ликвидациях. Это хрупкий рост, который может развернуться.
+
+Если BTC растёт и 60% объёма — спот, значит реальные покупатели заходят в рынок. Это устойчивый рост.
+
+<b>Правило фондов:</b> "Spot leads, perps follow." Если спот покупает — тренд настоящий.
+
+Данные: Binance Spot + Binance Futures (бесплатно, обновление каждые 10 мин).""",
 
         "faq_ai": """<b>🤖 Как работает AI-анализ?</b>
 
@@ -516,24 +592,35 @@ Santiment · Deribit · Nansen · and 20+ more
         "faq_btn_signals": "📊 Signals",
         "faq_btn_whales": "🐋 Whales",
         "faq_btn_options": "📈 Options",
+        "faq_btn_orderflow": "📊 Order Flow",
+        "faq_btn_liquidity": "🔥 Liquidations",
+        "faq_btn_structure": "🏗 Structure",
         "faq_btn_ai": "🤖 AI Analysis",
         "faq_btn_data": "📡 Data Sources",
         "faq_btn_plans": "💰 Plans",
 
         "faq_signals": """<b>📊 What are Signals?</b>
 
-A signal is the result of analyzing 30+ market indicators. The algorithm evaluates:
+A signal is the result of analyzing 30+ market indicators through a 3-layer pipeline.
 
-<b>Direction</b> — where money is flowing right now (up / down / sideways). Looks at funding rate, long/short ratio, buy/sell volume, liquidations.
+<b>Layer 1: Direction</b> — where money flows (up / down / sideways). Uses 9 factors: funding rate, long/short, CVD, whales, MACD, etc.
 
-<b>Signal strength</b> — how many factors agree:
+<b>Layer 2: Market State</b> — phase: short squeeze, panic, accumulation, distribution, sideways.
+
+<b>Layer 3: Setup Quality</b> — how good is the entry (strong / medium / weak / poor).
+
+<b>Signal strength:</b>
 🟩⬜⬜⬜⬜ weak — few confirmations
 🟩🟩🟩⬜⬜ medium — most agree
 🟩🟩🟩🟩🟩 strong — all point one way
 
-<b>Recommendation</b> — buy / sell / hold. Based on rules, not opinion.
+<b>Probability</b> — % up vs down. Calculated from bull/bear factor ratio + setup quality.
 
-⚠️ This is not financial advice. Always do your own research.""",
+<b>⚠️ Traps</b>
+"Shorts trapped" — shorters overpaid (negative funding), getting liquidated. Possible short squeeze — rapid rise from cascading short liquidations.
+"Longs trapped" — longs overleveraged, possible long squeeze — rapid drop.
+
+⚠️ Not financial advice. Always DYOR.""",
 
         "faq_whales": """<b>🐋 What are Whales?</b>
 
@@ -564,7 +651,72 @@ Options are contracts to buy (Call) or sell (Put) crypto at a fixed price in the
 • 30-60% — normal
 • &gt; 60% — big move expected
 
-<b>Expirations</b> — dates when options expire. Large expiry = increased volatility.""",
+<b>Expirations</b> — dates when options expire. Large expiry = increased volatility.
+
+<b>Option Bias</b> — our options sentiment indicator (Bullish/Bearish %). Calculated from PCR + price position relative to Max Pain.
+
+<b>🎯 Target Magnet</b> — the Max Pain level. Before expiry, market makers push price toward Max Pain so most options expire worthless.""",
+
+        "faq_orderflow": """<b>📊 Order Flow</b>
+
+Shows REAL buy/sell pressure, not just price movement.
+
+<b>CVD (Cumulative Volume Delta)</b> — difference between market buys and sells over 1 hour.
+• CVD +42M — buyers aggressively bought $42M more than sellers sold
+• CVD -55M — sellers dominating
+• Price rises but CVD falls = fake rally, possible trap
+• Price flat but CVD rises = someone quietly accumulating
+
+<b>Order Book</b>
+🟢 Buys / 🔴 Sells — volume of limit orders in the book.
+
+<b>Walls</b>
+🟩 Buy wall — large limit buy order. Price support.
+🟥 Sell wall — large limit sell order. Resistance.
+
+A buy wall at $82,400 ($4.2M) means a market maker doesn't want price to drop below that level.
+
+Data: Binance Futures (free, updates every 2-5 min).""",
+
+        "faq_liquidity": """<b>🔥 Liquidation Map</b>
+
+Shows WHERE market makers may push price to grab liquidity.
+
+<b>How it works:</b>
+Most traders use 10x-25x leverage. A 5% drop liquidates all 20x longs. These liquidations act as price magnets.
+
+<b>What we show:</b>
+🔥 $86,200 — short stops (above price). If price reaches here, shorts cascade-liquidate, pushing price higher.
+🔥 $78,100 — long stops (below price). If price drops here, longs cascade-liquidate, pushing price lower.
+
+<b>Why it matters:</b>
+Market makers know where stops are. Price often "hunts liquidity" — sweeps stops on one side, then reverses. This is called a "liquidation magnet."
+
+<b>Also shown:</b>
+💥 1h Liquidations — how much money was liquidated (longs vs shorts). More short liquidations = upward pressure, and vice versa.
+
+Calculation: based on current price, popular leverage (10x-25x), and long/short ratio.""",
+
+        "faq_structure": """<b>🏗 Market Structure — Spot vs Perp</b>
+
+Shows WHO is driving the market: real buyers or derivative traders.
+
+<b>Spot Volume</b> — real buy/sell volume. Someone actually buying BTC with dollars.
+
+<b>Perp Volume</b> — perpetual futures trading volume. Leveraged trading without owning actual BTC.
+
+<b>Spot Dominance</b> — what % of total volume is spot.
+• Spot &gt; 50% — growth backed by real buys, trend is stable
+• Perp &gt; 70% — derivatives driving market, movement is fragile
+
+<b>Why it matters:</b>
+If BTC rises $3K but 80% volume is perps — the rally is built on leverage and liquidations. Fragile, can reverse.
+
+If BTC rises and 60% is spot — real buyers entering. Sustainable rally.
+
+<b>Fund rule:</b> "Spot leads, perps follow." If spot is buying — the trend is real.
+
+Data: Binance Spot + Futures (free, updates every 10 min).""",
 
         "faq_ai": """<b>🤖 How does AI Analysis work?</b>
 
@@ -671,18 +823,23 @@ def _coin_page_buttons(page: int = 0, prefix: str = "coin_") -> list:
 
 
 def _page_nav_buttons(page: int, total_pages: int, lang: str = "ru") -> list:
-    """Кнопки навигации между страницами"""
+    """Кнопки навигации между страницами — показывают какие монеты на другой странице"""
     if total_pages <= 1:
         return []
     buttons = []
     if page > 0:
-        buttons.append(InlineKeyboardButton(text="◀", callback_data=f"page_{page - 1}"))
-    buttons.append(InlineKeyboardButton(
-        text=t("page_label", lang, page=page + 1, total=total_pages),
-        callback_data="noop"
-    ))
+        # Показываем первые монеты предыдущей страницы
+        prev_start = (page - 1) * COINS_PER_PAGE
+        prev_coins = COINS[prev_start:prev_start + 3]
+        prev_label = f"◀ {', '.join(prev_coins)}..."
+        buttons.append(InlineKeyboardButton(text=prev_label, callback_data=f"page_{page - 1}"))
     if page < total_pages - 1:
-        buttons.append(InlineKeyboardButton(text="▶", callback_data=f"page_{page + 1}"))
+        # Показываем первые монеты следующей страницы
+        next_start = (page + 1) * COINS_PER_PAGE
+        next_coins = COINS[next_start:next_start + 3]
+        _more = "Ещё" if lang == "ru" else "More"
+        next_label = f"{_more}: {', '.join(next_coins)}... ▶"
+        buttons.append(InlineKeyboardButton(text=next_label, callback_data=f"page_{page + 1}"))
     return buttons
 
 
@@ -1903,10 +2060,17 @@ def kb_faq(lang: str = "ru"):
         ],
         [
             InlineKeyboardButton(text=t("faq_btn_options", lang), callback_data="faq_options"),
-            InlineKeyboardButton(text=t("faq_btn_ai", lang), callback_data="faq_ai"),
+            InlineKeyboardButton(text=t("faq_btn_orderflow", lang), callback_data="faq_orderflow"),
         ],
         [
+            InlineKeyboardButton(text=t("faq_btn_liquidity", lang), callback_data="faq_liquidity"),
+            InlineKeyboardButton(text=t("faq_btn_structure", lang), callback_data="faq_structure"),
+        ],
+        [
+            InlineKeyboardButton(text=t("faq_btn_ai", lang), callback_data="faq_ai"),
             InlineKeyboardButton(text=t("faq_btn_data", lang), callback_data="faq_data"),
+        ],
+        [
             InlineKeyboardButton(text=t("faq_btn_plans", lang), callback_data="faq_plans"),
         ],
         [
