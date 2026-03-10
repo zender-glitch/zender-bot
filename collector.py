@@ -752,7 +752,7 @@ async def cryptoquant_get(endpoint_key: str) -> dict | None:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
                 f"{CRYPTOQUANT_BASE}{path}",
-                headers={"Authorization": f"Bearer {CRYPTOQUANT_KEY}"}
+                headers={"Authorization": f"Bearer {CRYPTOQUANT_KEY.strip()}"}
             )
             if resp.status_code != 200:
                 log.warning(f"  ⚠️ CryptoQuant {endpoint_key}: HTTP {resp.status_code}")
@@ -786,14 +786,14 @@ async def fetch_cryptoquant_data(symbol: str) -> dict:
     result = {}
 
     # Exchange Reserve
-    reserve = cryptoquant_get(f"{prefix}_exchange_reserve")
+    reserve = await cryptoquant_get(f"{prefix}_exchange_reserve")
     if reserve and isinstance(reserve, dict):
         val = reserve.get("reserve") or reserve.get("value") or reserve.get("exchange_reserve")
         if val is not None:
             result["cq_exchange_reserve"] = float(val)
 
     # Exchange Netflow
-    netflow = cryptoquant_get(f"{prefix}_exchange_netflow")
+    netflow = await cryptoquant_get(f"{prefix}_exchange_netflow")
     if netflow and isinstance(netflow, dict):
         val = netflow.get("netflow") or netflow.get("value") or netflow.get("exchange_netflow")
         if val is not None:
@@ -801,7 +801,7 @@ async def fetch_cryptoquant_data(symbol: str) -> dict:
 
     # Miner Outflow (только BTC)
     if symbol == "BTC":
-        miner = cryptoquant_get("btc_miner_outflow")
+        miner = await cryptoquant_get("btc_miner_outflow")
         if miner and isinstance(miner, dict):
             val = miner.get("outflow") or miner.get("value") or miner.get("miner_outflow")
             if val is not None:
