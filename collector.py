@@ -974,6 +974,194 @@ async def fetch_options_data(symbol: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# CVD (Cumulative Volume Delta) — Binance Futures API (бесплатно, без ключа)
+# Показывает кто реально давит рынок: агрессивные покупатели или продавцы.
+# ══════════════════════════════════════════════════════════════════════════════
+
+CVD_CACHE = {}
+CVD_CACHE_TTL = 5 * 60  # 5 минут — CVD меняется быстро
+
+BINANCE_FUTURES_BASE = "https://fapi.binance.com"
+
+# Маппинг символов на Binance futures тикеры
+BINANCE_FUTURES_MAP = {
+    "BTC": "BTCUSDT",
+    "ETH": "ETHUSDT",
+    "SOL": "SOLUSDT",
+    "BNB": "BNBUSDT",
+    "AVAX": "AVAXUSDT",
+}
+
+
+async def fetch_cvd(symbol: str) -> dict:
+    """
+    CVD из Binance Futures taker buy/sell volume.
+    Берём последние 3 свечи по 5 мин (= 15 мин окно).
+    CVD = sum(takerBuyVolValue) - sum(takerSellVolValue) за это окно.
+    Также считаем тренд: растёт CVD или падает (сравниваем с предыдущим окном).
+    """
+    ticker = BINANCE_FUTURES_MAP.get(symbol)
+    if not ticker:
+        return {}
+
+    cache_key = f"cvd_{symbol}"
+    if cache_key in CVD_CACHE and (time.time() - CVD_CACHE[cache_key]["ts"]) < CVD_CACHE_TTL:
+        return CVD_CACHE[cache_key]["data"]
+
+    try:
+        url = f"{BINANCE_FUTURES_BASE}/futures/data/takerlongshortRatio"
+        # Также берём raw taker buy/sell volume
+        vol_url = f"{BINANCE_FUTURES_BASE}/futures/data/takerBuySellVol"
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(vol_url, params={
+                "symbol": ticker,
+                "period": "5m",
+                "limit": 6,  # 6 свечей по 5 мин = 30 мин: 3 текущих + 3 предыдущих
+            })
+            if resp.status_code != 200:
+                log.warning(f"  ⚠️ CVD {symbol}: Binance status={resp.status_code}")
+                return {}
+            data = resp.json()
+            if not data or len(data) < 6:
+                # Если мало данных, берём что есть
+                if not data:
+                    return {}
+
+        # data отсортирован по времени (старые → новые)
+        # Считаем CVD для двух окон
+        prev_window = data[:3] if len(data) >= 6 else []
+        curr_window = data[-3:] if len(data) >= 3 else data
+
+        def calc_cvd(window):
+            buy_vol = sum(float(c.get("buyVol", 0)) for c in window)
+            sell_vol = sum(float(c.get("sellVol", 0)) for c in window)
+            return buy_vol - sell_vol
+
+        cvd_current = calc_cvd(curr_window)
+        cvd_previous = calc_cvd(prev_window) if prev_window else 0
+
+        # Определяем тренд CVD
+        if cvd_previous != 0:
+            cvd_trend = "rising" if cvd_current > cvd_previous else "falling"
+        else:
+            cvd_trend = "rising" if cvd_current > 0 else "falling"
+
+        # Определяем доминирующую сторону
+        cvd_side = "buyers" if cvd_current > 0 else "sellers"
+
+        result = {
+            "cvd_value": round(cvd_current, 2),
+            "cvd_trend": cvd_trend,    # rising / falling
+            "cvd_side": cvd_side,      # buyers / sellers
+        }
+        CVD_CACHE[cache_key] = {"data": result, "ts": time.time()}
+        log.info(f"  📊 CVD {symbol}: {cvd_current:+.1f} ({cvd_trend}, {cvd_side})")
+        return result
+
+    except Exception as e:
+        log.warning(f"  ⚠️ CVD {symbol} error: {e}")
+        return {}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ORDER BOOK IMBALANCE (OBI) — Binance Futures API (бесплатно, без ключа)
+# Показывает дисбаланс лимитных ордеров: где больше стен — покупка или продажа.
+# ══════════════════════════════════════════════════════════════════════════════
+
+OBI_CACHE = {}
+OBI_CACHE_TTL = 2 * 60  # 2 минуты — стакан меняется быстро
+
+
+async def fetch_order_book_imbalance(symbol: str) -> dict:
+    """
+    Order Book Imbalance из Binance Futures depth.
+    Берём топ-20 уровней bids и asks.
+    OBI = (bid_volume - ask_volume) / (bid_volume + ask_volume)
+    Также находим ближайшие крупные стены поддержки и сопротивления.
+    """
+    ticker = BINANCE_FUTURES_MAP.get(symbol)
+    if not ticker:
+        return {}
+
+    cache_key = f"obi_{symbol}"
+    if cache_key in OBI_CACHE and (time.time() - OBI_CACHE[cache_key]["ts"]) < OBI_CACHE_TTL:
+        return OBI_CACHE[cache_key]["data"]
+
+    try:
+        url = f"{BINANCE_FUTURES_BASE}/fapi/v1/depth"
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, params={
+                "symbol": ticker,
+                "limit": 20,
+            })
+            if resp.status_code != 200:
+                log.warning(f"  ⚠️ OBI {symbol}: Binance status={resp.status_code}")
+                return {}
+            data = resp.json()
+
+        bids = data.get("bids", [])  # [[price, qty], ...]
+        asks = data.get("asks", [])
+
+        if not bids or not asks:
+            return {}
+
+        # Считаем суммарный объём (price * qty для USD value)
+        bid_volume = sum(float(b[0]) * float(b[1]) for b in bids)
+        ask_volume = sum(float(a[0]) * float(a[1]) for a in asks)
+        total = bid_volume + ask_volume
+
+        if total == 0:
+            return {}
+
+        # OBI: от -1 (все продают) до +1 (все покупают)
+        obi = (bid_volume - ask_volume) / total
+
+        # Определяем сторону
+        if obi > 0.1:
+            obi_side = "BUY"
+        elif obi < -0.1:
+            obi_side = "SELL"
+        else:
+            obi_side = "NEUTRAL"
+
+        # Находим крупнейшую стену поддержки (bid) и сопротивления (ask)
+        biggest_bid = max(bids, key=lambda b: float(b[0]) * float(b[1]))
+        biggest_ask = max(asks, key=lambda a: float(a[0]) * float(a[1]))
+
+        support_price = float(biggest_bid[0])
+        support_vol = float(biggest_bid[0]) * float(biggest_bid[1])
+        resistance_price = float(biggest_ask[0])
+        resistance_vol = float(biggest_ask[0]) * float(biggest_ask[1])
+
+        result = {
+            "obi_value": round(obi, 4),
+            "obi_side": obi_side,                          # BUY / SELL / NEUTRAL
+            "obi_bid_vol": round(bid_volume),               # USD
+            "obi_ask_vol": round(ask_volume),               # USD
+            "obi_support_price": round(support_price, 2),   # ближайшая крупная стена покупки
+            "obi_support_vol": round(support_vol),           # объём стены
+            "obi_resistance_price": round(resistance_price, 2),
+            "obi_resistance_vol": round(resistance_vol),
+        }
+        OBI_CACHE[cache_key] = {"data": result, "ts": time.time()}
+        log.info(f"  📊 OBI {symbol}: {obi:+.3f} ({obi_side}) | support ${support_price:,.0f} (${support_vol:,.0f}) | resist ${resistance_price:,.0f} (${resistance_vol:,.0f})")
+        return result
+
+    except Exception as e:
+        log.warning(f"  ⚠️ OBI {symbol} error: {e}")
+        return {}
+
+
+async def fetch_flow_data(symbol: str) -> dict:
+    """Агрегатор: CVD + Order Book Imbalance параллельно."""
+    cvd, obi = await asyncio.gather(
+        fetch_cvd(symbol),
+        fetch_order_book_imbalance(symbol),
+    )
+    return {**cvd, **obi}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # COINGLASS INDICATORS (уже платим $95/мес STARTUP — используем больше endpoints!)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1732,6 +1920,18 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
     bid_ask_ratio = coin_data.get("bid_ask_ratio")
     # ETH Gas (Etherscan)
     eth_gas = coin_data.get("eth_gas_avg")
+    # CVD + Order Book Imbalance (Binance Futures)
+    cvd_value = coin_data.get("cvd_value")
+    cvd_trend = coin_data.get("cvd_trend")
+    cvd_side = coin_data.get("cvd_side")
+    obi_value = coin_data.get("obi_value")
+    obi_side = coin_data.get("obi_side")
+    obi_bid_vol = coin_data.get("obi_bid_vol")
+    obi_ask_vol = coin_data.get("obi_ask_vol")
+    obi_support_price = coin_data.get("obi_support_price")
+    obi_support_vol = coin_data.get("obi_support_vol")
+    obi_resistance_price = coin_data.get("obi_resistance_price")
+    obi_resistance_vol = coin_data.get("obi_resistance_vol")
     # Блок on-chain + технических данных для промпта
     onchain_block = ""
     onchain_lines = []
@@ -1847,6 +2047,44 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
                 onchain_lines.append(f"- Max Pain: ${opt_max_pain:,.0f}")
         if opt_oi_calls and opt_oi_puts:
             onchain_lines.append(f"- OI: {opt_oi_calls:,.0f} calls / {opt_oi_puts:,.0f} puts")
+
+    # ПОТОК ДЕНЕГ: CVD + Order Book Imbalance (Binance Futures)
+    if any([cvd_value is not None, obi_value is not None]):
+        onchain_lines.append(f"\nПОТОК ДЕНЕГ (кто реально двигает рынок):")
+        if cvd_value is not None:
+            cvd_arrow = "↑" if cvd_trend == "rising" else "↓"
+            cvd_who = "покупатели давят" if cvd_side == "buyers" else "продавцы давят"
+            onchain_lines.append(f"- CVD (15m): {cvd_arrow} {cvd_value:+.1f} — {cvd_who}")
+            # Дивергенция CVD vs цена — самый сильный сигнал!
+            if change is not None:
+                try:
+                    change_val = float(change)
+                    if change_val > 0 and cvd_value < 0:
+                        onchain_lines.append(f"  ⚠️ ДИВЕРГЕНЦИЯ: цена растёт, но CVD падает — рост может быть искусственным!")
+                    elif change_val < 0 and cvd_value > 0:
+                        onchain_lines.append(f"  ⚠️ ДИВЕРГЕНЦИЯ: цена падает, но CVD растёт — возможен разворот вверх (киты аккумулируют)")
+                except (ValueError, TypeError):
+                    pass
+        if obi_value is not None:
+            obi_hint = "покупатели (сильная поддержка снизу)" if obi_side == "BUY" else "продавцы (стена продаж сверху)" if obi_side == "SELL" else "баланс"
+            onchain_lines.append(f"- Order Book Imbalance: {obi_value:+.3f} — {obi_hint}")
+            if obi_bid_vol and obi_ask_vol:
+                onchain_lines.append(f"  Bids: ${obi_bid_vol/1e6:.1f}M / Asks: ${obi_ask_vol/1e6:.1f}M")
+            if obi_support_price and obi_support_vol:
+                onchain_lines.append(f"  Поддержка: ${obi_support_price:,.0f} (${obi_support_vol/1e6:.1f}M)")
+            if obi_resistance_price and obi_resistance_vol:
+                onchain_lines.append(f"  Сопротивление: ${obi_resistance_price:,.0f} (${obi_resistance_vol/1e6:.1f}M)")
+
+        # КОМБО-СИГНАЛ: FR отрицательный + CVD растёт + OBI BUY = short squeeze
+        if fr is not None and cvd_value is not None and obi_side is not None:
+            try:
+                fr_val = float(fr)
+                if fr_val < 0 and cvd_value > 0 and obi_side == "BUY":
+                    onchain_lines.append(f"  🔥 КОМБО: FR отрицательный + CVD растёт + стакан BUY = вероятен short squeeze!")
+                elif fr_val > 0.05 and cvd_value < 0 and obi_side == "SELL":
+                    onchain_lines.append(f"  🔥 КОМБО: FR высокий + CVD падает + стакан SELL = вероятен long squeeze!")
+            except (ValueError, TypeError):
+                pass
 
     if onchain_lines:
         onchain_block = "\n".join(onchain_lines)
@@ -2648,6 +2886,9 @@ async def collect_all():
             # Options данные: Deribit + Binance + OKX (бесплатно, EU сервер)
             options_data = await fetch_options_data(symbol)
 
+            # CVD + Order Book Imbalance (Binance Futures, бесплатно)
+            flow_data = await fetch_flow_data(symbol)
+
             # Технические индикаторы (RSI, MACD, SMA — для не-BTC монет, из CoinGecko истории)
             tech_data = await fetch_tech_indicators(symbol)
 
@@ -2681,6 +2922,7 @@ async def collect_all():
                 **tech_data,          # RSI, MACD, SMA50, SMA200 (для не-BTC монет)
                 **etherscan_data,     # Etherscan: ETH gas
                 **options_data,       # Deribit + Binance + OKX: IV, PCR, MaxPain
+                **flow_data,         # CVD + Order Book Imbalance (Binance Futures)
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -2767,6 +3009,15 @@ async def collect_all():
                 "options_max_pain": str(coin_data.get("options_max_pain", "—")),
                 "options_oi_calls": str(coin_data.get("options_oi_calls", "—")),
                 "options_oi_puts": str(coin_data.get("options_oi_puts", "—")),
+                "cvd_value": str(coin_data.get("cvd_value", "—")),
+                "cvd_trend": str(coin_data.get("cvd_trend", "—")),
+                "cvd_side": str(coin_data.get("cvd_side", "—")),
+                "obi_value": str(coin_data.get("obi_value", "—")),
+                "obi_side": str(coin_data.get("obi_side", "—")),
+                "obi_bid_vol": str(coin_data.get("obi_bid_vol", "—")),
+                "obi_ask_vol": str(coin_data.get("obi_ask_vol", "—")),
+                "obi_support_price": str(coin_data.get("obi_support_price", "—")),
+                "obi_resistance_price": str(coin_data.get("obi_resistance_price", "—")),
                 "signal": signal_bar,
                 "label": signal_label,
                 "signal_label": signal_label,
