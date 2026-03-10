@@ -771,6 +771,8 @@ async def fetch_deribit_options(symbol: str) -> dict:
             iv_values = []
             strikes_data = {}  # {strike: {"call_oi": X, "put_oi": Y}} для Max Pain
 
+            expiry_oi = {}  # {expiry_str: total_oi} для экспираций
+
             for item in results:
                 name = item.get("instrument_name", "")
                 oi = float(item.get("open_interest", 0) or 0)
@@ -781,10 +783,15 @@ async def fetch_deribit_options(symbol: str) -> dict:
                 if len(parts) < 4:
                     continue
                 opt_type = parts[-1]  # C или P
+                expiry_str = parts[1]  # 28MAR25
                 try:
                     strike = float(parts[-2])
                 except (ValueError, IndexError):
                     continue
+
+                # Суммируем OI по экспирациям
+                if oi > 0:
+                    expiry_oi[expiry_str] = expiry_oi.get(expiry_str, 0) + oi
 
                 if opt_type == "C":
                     total_oi_calls += oi
@@ -835,6 +842,40 @@ async def fetch_deribit_options(symbol: str) -> dict:
                         max_pain_loss = total_loss
                         max_pain = test_strike
 
+            # Топ-3 экспирации по OI + парсинг дат
+            import calendar
+            MONTHS = {v: k for k, v in enumerate(calendar.month_abbr) if v}
+            top_expiries = []
+            now_ts = datetime.now(timezone.utc)
+            for exp_str, exp_oi in sorted(expiry_oi.items(), key=lambda x: -x[1]):
+                # Парсим "28MAR25" → datetime
+                try:
+                    day = int(exp_str[:len(exp_str)-5])
+                    mon_str = exp_str[len(exp_str)-5:len(exp_str)-2].upper()
+                    yr = int("20" + exp_str[-2:])
+                    mon = MONTHS.get(mon_str.capitalize(), 0)
+                    if mon == 0:
+                        continue
+                    exp_date = datetime(yr, mon, day, 8, 0, tzinfo=timezone.utc)
+                    days_left = (exp_date - now_ts).days
+                    if days_left < 0:
+                        continue
+                    top_expiries.append({
+                        "date": exp_str,
+                        "oi": round(exp_oi),
+                        "days": days_left,
+                    })
+                except (ValueError, IndexError):
+                    continue
+            # Сортируем по дате (ближайшие первые), берём топ-3
+            top_expiries.sort(key=lambda x: x["days"])
+            top_expiries = top_expiries[:3]
+            # Помечаем макс OI среди топ-3
+            if top_expiries:
+                max_oi_val = max(e["oi"] for e in top_expiries)
+                for e in top_expiries:
+                    e["is_max"] = (e["oi"] == max_oi_val)
+
             result = {}
             if pcr is not None:
                 result["options_pcr"] = pcr
@@ -846,13 +887,16 @@ async def fetch_deribit_options(symbol: str) -> dict:
                 result["options_oi_calls"] = round(total_oi_calls, 2)
             if total_oi_puts > 0:
                 result["options_oi_puts"] = round(total_oi_puts, 2)
+            if top_expiries:
+                result["options_expiries"] = top_expiries
 
             if result:
                 OPTIONS_CACHE[cache_key] = {"data": result, "ts": time.time()}
                 pcr_str = f"PCR={pcr}" if pcr else ""
                 iv_str = f"IV={avg_iv}%" if avg_iv else ""
                 mp_str = f"MaxPain=${max_pain:,.0f}" if max_pain else ""
-                log.info(f"  📊 Deribit {symbol} Options: {pcr_str} | {iv_str} | {mp_str}")
+                exp_str = f"Expiries={len(top_expiries)}" if top_expiries else ""
+                log.info(f"  📊 Deribit {symbol} Options: {pcr_str} | {iv_str} | {mp_str} | {exp_str}")
 
             return result
 
@@ -2333,6 +2377,74 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
 #
 #   RAW DATA → СЛОЙ 1 (направление) → СЛОЙ 2 (состояние) → СЛОЙ 3 (качество)
 #                                                               ↓
+async def generate_options_ai(symbol: str, opts: dict, lang: str = "ru") -> str:
+    """
+    AI-анализ опционных данных для BTC/ETH.
+    Короткий текст 3-4 предложения, объясняющий что значат опционные метрики.
+    """
+    if not HAS_ANTHROPIC:
+        return ""
+
+    pcr = opts.get("pcr", "—")
+    max_pain = opts.get("max_pain", "—")
+    iv = opts.get("iv", "—")
+    oi_calls = opts.get("oi_calls", "—")
+    oi_puts = opts.get("oi_puts", "—")
+    price = opts.get("price", "—")
+    expiries = opts.get("expiries", "—")
+
+    lang_instruction = "Отвечай на русском." if lang == "ru" else "Answer in English."
+
+    prompt = f"""Ты крипто-аналитик. Объясни опционные данные {symbol} простым языком.
+{lang_instruction}
+
+Данные:
+- Цена: {price}
+- Put/Call Ratio: {pcr}
+- Max Pain: {max_pain}
+- Implied Volatility: {iv}%
+- OI Calls: {oi_calls} | OI Puts: {oi_puts}
+- Ближайшие экспирации: {expiries}
+
+Напиши 3-4 коротких предложения:
+1. Что говорит PCR — бычий или медвежий рынок опционов
+2. Куда тянет Max Pain цену и что это значит
+3. Что значит текущая IV — ждать ли резких движений
+4. Если скоро экспирация — предупреди о волатильности
+
+Максимум 200 символов. Без звёздочек. Конкретно и полезно для трейдера."""
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 300,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data.get("content", [{}])[0].get("text", "")
+                text = text.replace("**", "").replace("*", "").strip()
+                if len(text) > 300:
+                    text = text[:297] + "..."
+                log.info(f"  🤖 Options AI {symbol}: {len(text)} chars")
+                return text
+            else:
+                log.warning(f"  ⚠️ Options AI {symbol}: HTTP {resp.status_code}")
+                return ""
+    except Exception as e:
+        log.warning(f"  ⚠️ Options AI {symbol}: {e}")
+        return ""
+
+
 #                                                        LLM FORMATTER
 #                                                               ↓
 #                                                       TELEGRAM OUTPUT
@@ -3089,6 +3201,7 @@ async def collect_all():
                 "options_max_pain": str(coin_data.get("options_max_pain", "—")),
                 "options_oi_calls": str(coin_data.get("options_oi_calls", "—")),
                 "options_oi_puts": str(coin_data.get("options_oi_puts", "—")),
+                "options_expiries": str(coin_data.get("options_expiries", "—")),
                 "cvd_value": str(coin_data.get("cvd_value", "—")),
                 "cvd_trend": str(coin_data.get("cvd_trend", "—")),
                 "cvd_side": str(coin_data.get("cvd_side", "—")),

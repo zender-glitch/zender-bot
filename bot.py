@@ -37,6 +37,9 @@ COINS = [
     "ATOM", "NEAR", "APT", "ARB", "OP",
 ]
 
+# Монеты с опционными данными (Deribit)
+COINS_WITH_OPTIONS = {"BTC", "ETH"}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ЛОКАЛИЗАЦИЯ (i18n) — RU / EN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -181,6 +184,34 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
         "page_label": "Стр. {page}/{total}",
         "next_page": "▶",
         "prev_page": "◀",
+
+        # Опционы
+        "btn_options": "📊 Опционы {coin}",
+        "btn_back_coin": "◀ Назад к {coin}",
+        "options_title": "⚡ ZENDER TERMINAL · {coin} OPTIONS",
+        "options_pcr_label": "📊 Put/Call Ratio",
+        "options_pcr_bullish": "Больше колов — рынок ждёт рост",
+        "options_pcr_bearish": "Больше путов — рынок ждёт падение",
+        "options_pcr_neutral": "Баланс колов и путов — неопределённость",
+        "options_maxpain_label": "🎯 Max Pain",
+        "options_maxpain_above": "Тянет вверх к Max Pain ({pct})",
+        "options_maxpain_below": "Тянет вниз к Max Pain ({pct})",
+        "options_maxpain_at": "Цена у Max Pain — магнит работает",
+        "options_iv_label": "📈 IV (волатильность)",
+        "options_iv_low": "тихий рынок",
+        "options_iv_normal": "нормальная",
+        "options_iv_high": "повышенная — жди движение",
+        "options_iv_extreme": "шторм — резкое движение близко",
+        "options_oi_title": "━━━ OPEN INTEREST ━━━",
+        "options_oi_bulls": "Быки доминируют в опционах",
+        "options_oi_bears": "Медведи доминируют в опционах",
+        "options_oi_balanced": "Баланс быков и медведей",
+        "options_exp_title": "━━━ ЭКСПИРАЦИИ ━━━",
+        "options_exp_days": "через {days} д.",
+        "options_exp_warning": "Возможна волатильность",
+        "options_exp_max": "Крупная экспирация = магнит цены",
+        "options_ai_title": "━━━ 🤖 AI-АНАЛИЗ ━━━",
+        "options_teaser": "━━━ ОПЦИОНЫ {coin} ━━━",
     },
 
     "en": {
@@ -322,6 +353,34 @@ Santiment · Deribit · Nansen · and 20+ more
         "page_label": "Pg. {page}/{total}",
         "next_page": "▶",
         "prev_page": "◀",
+
+        # Options
+        "btn_options": "📊 Options {coin}",
+        "btn_back_coin": "◀ Back to {coin}",
+        "options_title": "⚡ ZENDER TERMINAL · {coin} OPTIONS",
+        "options_pcr_label": "📊 Put/Call Ratio",
+        "options_pcr_bullish": "More calls — market expects growth",
+        "options_pcr_bearish": "More puts — market expects decline",
+        "options_pcr_neutral": "Balanced calls and puts — uncertainty",
+        "options_maxpain_label": "🎯 Max Pain",
+        "options_maxpain_above": "Pulling up to Max Pain ({pct})",
+        "options_maxpain_below": "Pulling down to Max Pain ({pct})",
+        "options_maxpain_at": "Price at Max Pain — magnet active",
+        "options_iv_label": "📈 IV (volatility)",
+        "options_iv_low": "quiet market",
+        "options_iv_normal": "normal",
+        "options_iv_high": "elevated — expect a move",
+        "options_iv_extreme": "storm — sharp move incoming",
+        "options_oi_title": "━━━ OPEN INTEREST ━━━",
+        "options_oi_bulls": "Bulls dominate in options",
+        "options_oi_bears": "Bears dominate in options",
+        "options_oi_balanced": "Bulls and bears balanced",
+        "options_exp_title": "━━━ EXPIRATIONS ━━━",
+        "options_exp_days": "in {days} d.",
+        "options_exp_warning": "Possible volatility",
+        "options_exp_max": "Large expiry = price magnet",
+        "options_ai_title": "━━━ 🤖 AI ANALYSIS ━━━",
+        "options_teaser": "━━━ OPTIONS {coin} ━━━",
     },
 }
 
@@ -427,10 +486,16 @@ def kb_coin_detail(coin: str, page: int = 0, lang: str = "ru"):
     nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
     if nav:
         rows.append(nav)
-    rows.append([
+    # Кнопка Опционы только для BTC/ETH
+    action_row = [
         InlineKeyboardButton(text=t("btn_refresh", lang), callback_data=f"coin_{coin}"),
         InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
-    ])
+    ]
+    if coin in COINS_WITH_OPTIONS:
+        action_row.insert(0, InlineKeyboardButton(
+            text=t("btn_options", lang, coin=coin), callback_data=f"options_{coin}"
+        ))
+    rows.append(action_row)
     rows.append([
         InlineKeyboardButton(text=t("btn_back_radar", lang), callback_data="radar"),
     ])
@@ -866,12 +931,197 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         if sell_zone:
             lines.append(f"{t('sell_label', lang)}: {html_lib.escape(sell_zone)}")
 
+    # ── ТИЗЕР ОПЦИОНОВ (только BTC/ETH) ──
+    if coin in ("BTC", "ETH"):
+        pcr_val = d.get("options_pcr", "—")
+        mp_val = d.get("options_max_pain", "—")
+        # Ближайшая экспирация
+        exp_raw = d.get("options_expiries", "—")
+        nearest_exp = ""
+        if exp_raw and exp_raw != "—" and isinstance(exp_raw, str) and exp_raw.startswith("["):
+            try:
+                import ast
+                exps = ast.literal_eval(exp_raw)
+                if exps and isinstance(exps, list):
+                    e = exps[0]
+                    nearest_exp = f"🔥 {e.get('date', '')} — {e.get('oi', 0):,}K OI · {t('options_exp_days', lang, days=e.get('days', '?'))}"
+                    if e.get("days", 99) <= 3:
+                        nearest_exp += " ⚠️"
+            except Exception:
+                pass
+
+        if _has(pcr_val) and pcr_val != "—":
+            lines.append("")
+            lines.append(f"<b>{t('options_teaser', lang, coin=coin)}</b>")
+            try:
+                pcr_f = float(pcr_val)
+                if pcr_f < 0.7:
+                    pcr_hint = "бычий" if lang == "ru" else "bullish"
+                elif pcr_f > 1.0:
+                    pcr_hint = "медвежий" if lang == "ru" else "bearish"
+                else:
+                    pcr_hint = "нейтр." if lang == "ru" else "neutral"
+                mp_str = ""
+                if _has(mp_val) and mp_val != "—":
+                    try:
+                        mp_f = float(str(mp_val).replace("$", "").replace(",", ""))
+                        mp_str = f" · Max Pain: ${mp_f:,.0f}"
+                    except (ValueError, TypeError):
+                        pass
+                lines.append(f"📊 PCR: {pcr_f:.2f} {pcr_hint}{mp_str}")
+            except (ValueError, TypeError):
+                lines.append(f"📊 PCR: {pcr_val}")
+            if nearest_exp:
+                lines.append(nearest_exp)
+
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
     lines.append("t.me/ZenderTerminal_bot")
     lines.append("━━━━━━━━━━━━━━")
 
     return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ОПЦИОНЫ — ПОЛНЫЙ ЭКРАН
+# ══════════════════════════════════════════════════════════════════════════════
+
+def text_options_detail(coin: str, data: dict, lang: str = "ru", ai_text: str = "") -> str:
+    """Полный экран опционов для BTC/ETH."""
+    d = data.get(coin, {})
+    price = d.get("price", "—")
+
+    lines = [
+        f"<b>{t('options_title', lang, coin=coin)}</b>",
+        "━━━━━━━━━━━━━━",
+        "",
+    ]
+
+    # PCR
+    pcr_val = d.get("options_pcr", "—")
+    if _has(pcr_val) and pcr_val != "—":
+        try:
+            pcr_f = float(pcr_val)
+            lines.append(f"{t('options_pcr_label', lang)}: {pcr_f:.2f}")
+            if pcr_f < 0.7:
+                lines.append(f"→ {t('options_pcr_bullish', lang)}")
+            elif pcr_f > 1.0:
+                lines.append(f"→ {t('options_pcr_bearish', lang)}")
+            else:
+                lines.append(f"→ {t('options_pcr_neutral', lang)}")
+        except (ValueError, TypeError):
+            pass
+
+    # Max Pain
+    mp_val = d.get("options_max_pain", "—")
+    if _has(mp_val) and mp_val != "—":
+        try:
+            mp_f = float(str(mp_val).replace("$", "").replace(",", ""))
+            price_f = float(str(price).replace("$", "").replace(",", ""))
+            diff_pct = ((mp_f - price_f) / price_f) * 100
+            lines.append("")
+            lines.append(f"{t('options_maxpain_label', lang)}: ${mp_f:,.0f} (цена {price})" if lang == "ru" else f"{t('options_maxpain_label', lang)}: ${mp_f:,.0f} (price {price})")
+            if abs(diff_pct) < 0.5:
+                lines.append(f"→ {t('options_maxpain_at', lang)}")
+            elif diff_pct > 0:
+                lines.append(f"→ {t('options_maxpain_above', lang, pct=f'+{diff_pct:.1f}%')}")
+            else:
+                lines.append(f"→ {t('options_maxpain_below', lang, pct=f'{diff_pct:.1f}%')}")
+        except (ValueError, TypeError):
+            pass
+
+    # IV
+    iv_val = d.get("options_iv", "—")
+    if _has(iv_val) and iv_val != "—":
+        try:
+            iv_f = float(iv_val)
+            lines.append("")
+            if iv_f < 30:
+                iv_hint = t("options_iv_low", lang)
+            elif iv_f < 60:
+                iv_hint = t("options_iv_normal", lang)
+            elif iv_f < 80:
+                iv_hint = t("options_iv_high", lang)
+            else:
+                iv_hint = t("options_iv_extreme", lang)
+            lines.append(f"{t('options_iv_label', lang)}: {iv_f:.0f}% — {iv_hint}")
+        except (ValueError, TypeError):
+            pass
+
+    # OI
+    oi_calls = d.get("options_oi_calls", "—")
+    oi_puts = d.get("options_oi_puts", "—")
+    if _has(oi_calls) and _has(oi_puts) and oi_calls != "—" and oi_puts != "—":
+        try:
+            c = float(oi_calls)
+            p = float(oi_puts)
+            lines.append("")
+            lines.append(f"<b>{t('options_oi_title', lang)}</b>")
+            lines.append(f"🟢 Calls: {c/1000:,.0f}K     🔴 Puts: {p/1000:,.0f}K")
+            if c > p * 1.3:
+                lines.append(f"→ {t('options_oi_bulls', lang)}")
+            elif p > c * 1.3:
+                lines.append(f"→ {t('options_oi_bears', lang)}")
+            else:
+                lines.append(f"→ {t('options_oi_balanced', lang)}")
+        except (ValueError, TypeError):
+            pass
+
+    # Экспирации
+    exp_raw = d.get("options_expiries", "—")
+    if exp_raw and exp_raw != "—":
+        exps = None
+        if isinstance(exp_raw, list):
+            exps = exp_raw
+        elif isinstance(exp_raw, str) and exp_raw.startswith("["):
+            try:
+                import ast
+                exps = ast.literal_eval(exp_raw)
+            except Exception:
+                pass
+        if exps and isinstance(exps, list):
+            lines.append("")
+            lines.append(f"<b>{t('options_exp_title', lang)}</b>")
+            for e in exps:
+                date_str = e.get("date", "")
+                oi_val = e.get("oi", 0)
+                days = e.get("days", 99)
+                is_max = e.get("is_max", False)
+
+                line = f"{date_str} — {oi_val:,} OI · {t('options_exp_days', lang, days=days)}"
+                if days <= 3:
+                    line += " ⚠️"
+                if is_max:
+                    line += " 🔥"
+                lines.append(line)
+
+                # Подсказка
+                if days <= 3:
+                    lines.append(f"→ {t('options_exp_warning', lang)}")
+                elif is_max:
+                    lines.append(f"→ {t('options_exp_max', lang)}")
+                lines.append("")
+
+    # AI-анализ
+    if ai_text:
+        lines.append(f"<b>{t('options_ai_title', lang)}</b>")
+        lines.append(html_lib.escape(ai_text))
+
+    lines.append("")
+    lines.append("⚡ <b>Zender Terminal</b>")
+    lines.append("━━━━━━━━━━━━━━")
+
+    return "\n".join(lines)
+
+
+def kb_options(coin: str, lang: str = "ru"):
+    """Кнопки под экраном опционов"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t("btn_back_coin", lang, coin=coin), callback_data=f"coin_{coin}"),
+            InlineKeyboardButton(text=t("btn_refresh", lang), callback_data=f"options_{coin}"),
+        ],
+    ])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1029,6 +1279,45 @@ async def cb_coin(call: CallbackQuery):
         text_coin_analysis(coin, data, lang),
         parse_mode=ParseMode.HTML,
         reply_markup=kb_coin_detail(coin, page=page, lang=lang)
+    )
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("options_"))
+async def cb_options(call: CallbackQuery):
+    """📊 Полный экран опционов для BTC/ETH"""
+    lang = await get_user_lang(call.from_user.id)
+    coin = call.data.replace("options_", "")
+    if coin not in COINS_WITH_OPTIONS:
+        await call.answer("No options data")
+        return
+    data = await db.get_market_data([coin])
+
+    # Генерируем AI-анализ опционов
+    ai_text = ""
+    d = data.get(coin, {})
+    pcr = d.get("options_pcr", "—")
+    mp = d.get("options_max_pain", "—")
+    iv = d.get("options_iv", "—")
+    oi_c = d.get("options_oi_calls", "—")
+    oi_p = d.get("options_oi_puts", "—")
+    price = d.get("price", "—")
+
+    if _has(pcr) and pcr != "—":
+        try:
+            from collector import generate_options_ai
+            ai_text = await generate_options_ai(coin, {
+                "pcr": pcr, "max_pain": mp, "iv": iv,
+                "oi_calls": oi_c, "oi_puts": oi_p, "price": price,
+                "expiries": d.get("options_expiries", "—"),
+            }, lang)
+        except Exception as e:
+            log.warning(f"Options AI error: {e}")
+
+    await call.message.edit_text(
+        text_options_detail(coin, data, lang, ai_text),
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_options(coin, lang)
     )
     await call.answer()
 
