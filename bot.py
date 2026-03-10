@@ -219,6 +219,114 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
         "options_exp_max": "Крупная экспирация = магнит цены",
         "options_ai_title": "━━━ 🤖 AI-АНАЛИЗ ━━━",
         "options_teaser": "━━━ ОПЦИОНЫ {coin} ━━━",
+
+        # FAQ
+        "btn_faq": "📖 FAQ",
+        "faq_title": "<b>📖 FAQ — Частые вопросы</b>\n\nВыбери тему:",
+        "faq_btn_signals": "📊 Сигналы",
+        "faq_btn_whales": "🐋 Киты",
+        "faq_btn_options": "📈 Опционы",
+        "faq_btn_ai": "🤖 AI-анализ",
+        "faq_btn_data": "📡 Данные",
+        "faq_btn_plans": "💰 Тарифы",
+
+        "faq_signals": """<b>📊 Что такое сигналы?</b>
+
+Сигнал — это итог анализа 30+ показателей рынка. Алгоритм оценивает:
+
+<b>Направление</b> — куда давят деньги прямо сейчас (вверх / вниз / боковик). Смотрит на funding rate, long/short ratio, объём покупок/продаж, ликвидации.
+
+<b>Сила сигнала</b> — сколько факторов совпадают:
+🟩⬜⬜⬜⬜ слабый — мало подтверждений
+🟩🟩🟩⬜⬜ средний — большинство совпадает
+🟩🟩🟩🟩🟩 сильный — всё в одну сторону
+
+<b>Рекомендация</b> — покупать / продавать / выжидать. Основана на правилах, не на мнении.
+
+⚠️ Это не финансовый совет. Всегда проверяй сам.""",
+
+        "faq_whales": """<b>🐋 Что такое киты?</b>
+
+Киты — это крупные держатели крипты (кошельки с $500K+ в одной транзакции).
+
+<b>Whale Alert</b> — отслеживает ВСЕ крупные переводы на 11 блокчейнах в реальном времени.
+
+Что показываем:
+⬆️ <b>На биржи</b> — кит заводит крипту на биржу. Скорее всего готовится продавать. Медвежий сигнал.
+⬇️ <b>С бирж</b> — кит выводит крипту на холодный кошелёк. Накопление. Бычий сигнал.
+
+<b>Exchange Netflow</b> (только BTC) — суммарный поток BTC на/с бирж. Если отрицательный — больше выводят, бычий знак.
+
+Киты не всегда правы, но когда $50M уходит с биржи — это сигнал.""",
+
+        "faq_options": """<b>📈 Что такое опционы?</b>
+
+Опционы — это контракты на покупку (Call) или продажу (Put) крипты по фиксированной цене в будущем. Доступны для BTC и ETH.
+
+<b>PCR (Put/Call Ratio)</b> — соотношение путов к колам.
+• &lt; 0.7 — больше колов, рынок ждёт рост
+• &gt; 1.0 — больше путов, рынок ждёт падение
+
+<b>Max Pain</b> — цена, при которой БОЛЬШИНСТВО опционов истекают без прибыли. Цена тянется к ней перед экспирацией как магнит.
+
+<b>IV (Implied Volatility)</b> — ожидаемая волатильность:
+• &lt; 30% — тихо, спокойный рынок
+• 30-60% — нормально
+• &gt; 60% — ожидают резкое движение
+
+<b>Экспирации</b> — даты истечения опционов. Крупная экспирация = повышенная волатильность.""",
+
+        "faq_ai": """<b>🤖 Как работает AI-анализ?</b>
+
+Бот использует Claude AI (модель от Anthropic) для анализа каждой монеты.
+
+<b>Как это работает:</b>
+1. Алгоритм собирает 30+ метрик (цена, OI, funding, ликвидации, CVD, киты, опционы)
+2. 3-слойный pipeline считает направление, состояние рынка, качество сетапа
+3. AI получает ВСЕ данные + готовое решение алгоритма
+4. AI формулирует объяснение простым языком + уровни входа/стопа/цели
+
+<b>Важно:</b> AI НЕ принимает решение сам — он только объясняет то, что посчитал алгоритм. Решения rule-based (по правилам), а не по "мнению" нейросети.
+
+temperature = 0 — ответы детерминированные, без рандома.""",
+
+        "faq_data": """<b>📡 Откуда данные?</b>
+
+Бот агрегирует данные из 15+ источников:
+
+<b>Платные:</b>
+• Coinglass ($95/мес) — OI, Funding, L/S, ликвидации
+• Whale Alert ($30/мес) — крупные транзакции китов
+
+<b>Бесплатные:</b>
+• CoinGecko / CryptoCompare — цены
+• Deribit — опционы (PCR, IV, Max Pain)
+• Binance Futures — CVD, стакан
+• Bitget, Kraken, dYdX — cross-exchange данные
+• BGeometrics — SOPR, RSI, MACD, Exchange Netflow
+• Alternative.me — Fear &amp; Greed Index
+• DeFiLlama — TVL, стейблкоины
+• Blockchain.info — active addresses
+
+Обновление: каждые 5 мин (коллектор) + алерты по расписанию.""",
+
+        "faq_plans": """<b>💰 Тарифы</b>
+
+🆓 <b>Free</b> — бесплатно
+1 монета · AI-анализ · сигналы · алерты · 15 мин обновление
+
+🟢 <b>Basic $14/мес</b>
+Топ-20 монет · AI-анализ · сила сигнала · 5/15/60 мин
+
+🟡 <b>Pro $29/мес</b>
+Все метрики · Pro-дашборд · 3 темы · RU/EN · кастомизация
+
+🔴 <b>Pro+ $49/мес</b>
+Алерты 1-2 мин · сканер 200 монет · доп. языки
+
+Трейдер экономит $200-800/мес на подписках, получая всё в одном месте.
+
+💳 Оплата скоро — через Telegram Payments прямо в боте.""",
     },
 
     "en": {
@@ -395,6 +503,114 @@ Santiment · Deribit · Nansen · and 20+ more
         "options_exp_max": "Large expiry = price magnet",
         "options_ai_title": "━━━ 🤖 AI ANALYSIS ━━━",
         "options_teaser": "━━━ OPTIONS {coin} ━━━",
+
+        # FAQ
+        "btn_faq": "📖 FAQ",
+        "faq_title": "<b>📖 FAQ — Frequently Asked</b>\n\nChoose a topic:",
+        "faq_btn_signals": "📊 Signals",
+        "faq_btn_whales": "🐋 Whales",
+        "faq_btn_options": "📈 Options",
+        "faq_btn_ai": "🤖 AI Analysis",
+        "faq_btn_data": "📡 Data Sources",
+        "faq_btn_plans": "💰 Plans",
+
+        "faq_signals": """<b>📊 What are Signals?</b>
+
+A signal is the result of analyzing 30+ market indicators. The algorithm evaluates:
+
+<b>Direction</b> — where money is flowing right now (up / down / sideways). Looks at funding rate, long/short ratio, buy/sell volume, liquidations.
+
+<b>Signal strength</b> — how many factors agree:
+🟩⬜⬜⬜⬜ weak — few confirmations
+🟩🟩🟩⬜⬜ medium — most agree
+🟩🟩🟩🟩🟩 strong — all point one way
+
+<b>Recommendation</b> — buy / sell / hold. Based on rules, not opinion.
+
+⚠️ This is not financial advice. Always do your own research.""",
+
+        "faq_whales": """<b>🐋 What are Whales?</b>
+
+Whales are large crypto holders (wallets with $500K+ in a single transaction).
+
+<b>Whale Alert</b> tracks ALL large transfers across 11 blockchains in real time.
+
+What we show:
+⬆️ <b>To exchanges</b> — a whale deposits crypto to exchange. Likely preparing to sell. Bearish signal.
+⬇️ <b>From exchanges</b> — a whale withdraws to cold wallet. Accumulation. Bullish signal.
+
+<b>Exchange Netflow</b> (BTC only) — net BTC flow to/from exchanges. Negative = more withdrawals = bullish.
+
+Whales aren't always right, but when $50M leaves an exchange — it's a signal.""",
+
+        "faq_options": """<b>📈 What are Options?</b>
+
+Options are contracts to buy (Call) or sell (Put) crypto at a fixed price in the future. Available for BTC and ETH.
+
+<b>PCR (Put/Call Ratio)</b> — ratio of puts to calls.
+• &lt; 0.7 — more calls, market expects growth
+• &gt; 1.0 — more puts, market expects decline
+
+<b>Max Pain</b> — the price where MOST options expire worthless. Price is pulled toward it before expiration like a magnet.
+
+<b>IV (Implied Volatility)</b> — expected volatility:
+• &lt; 30% — quiet market
+• 30-60% — normal
+• &gt; 60% — big move expected
+
+<b>Expirations</b> — dates when options expire. Large expiry = increased volatility.""",
+
+        "faq_ai": """<b>🤖 How does AI Analysis work?</b>
+
+The bot uses Claude AI (by Anthropic) to analyze each coin.
+
+<b>How it works:</b>
+1. Algorithm collects 30+ metrics (price, OI, funding, liquidations, CVD, whales, options)
+2. 3-layer pipeline calculates direction, market state, setup quality
+3. AI receives ALL data + algorithm's decision
+4. AI formulates explanation in simple language + entry/stop/target levels
+
+<b>Important:</b> AI does NOT make decisions — it only explains what the algorithm calculated. Decisions are rule-based, not neural network "opinions."
+
+temperature = 0 — deterministic responses, no randomness.""",
+
+        "faq_data": """<b>📡 Where does data come from?</b>
+
+The bot aggregates data from 15+ sources:
+
+<b>Paid:</b>
+• Coinglass ($95/mo) — OI, Funding, L/S, liquidations
+• Whale Alert ($30/mo) — large whale transactions
+
+<b>Free:</b>
+• CoinGecko / CryptoCompare — prices
+• Deribit — options (PCR, IV, Max Pain)
+• Binance Futures — CVD, order book
+• Bitget, Kraken, dYdX — cross-exchange data
+• BGeometrics — SOPR, RSI, MACD, Exchange Netflow
+• Alternative.me — Fear &amp; Greed Index
+• DeFiLlama — TVL, stablecoins
+• Blockchain.info — active addresses
+
+Updates: every 5 min (collector) + alerts on schedule.""",
+
+        "faq_plans": """<b>💰 Plans</b>
+
+🆓 <b>Free</b> — free
+1 coin · AI analysis · signals · alerts · 15 min refresh
+
+🟢 <b>Basic $14/mo</b>
+Top-20 coins · AI analysis · signal strength · 5/15/60 min
+
+🟡 <b>Pro $29/mo</b>
+All metrics · Pro dashboard · 3 themes · RU/EN · customization
+
+🔴 <b>Pro+ $49/mo</b>
+1-2 min alerts · 200 coin scanner · extra languages
+
+Traders save $200-800/mo on subscriptions, getting everything in one place.
+
+💳 Payments coming soon — via Telegram Payments directly in the bot.""",
     },
 }
 
@@ -476,6 +692,7 @@ def kb_main(lang: str = "ru"):
         ],
         [
             InlineKeyboardButton(text=t("btn_subscription", lang), callback_data="subscription"),
+            InlineKeyboardButton(text=t("btn_faq", lang), callback_data="faq"),
             InlineKeyboardButton(text=t("btn_help", lang), callback_data="help"),
         ],
     ])
@@ -1502,6 +1719,68 @@ async def cb_back_main(call: CallbackQuery):
         reply_markup=kb_main(lang)
     )
     await call.answer()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FAQ
+# ══════════════════════════════════════════════════════════════════════════════
+
+def kb_faq(lang: str = "ru"):
+    """Кнопки FAQ — категории"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t("faq_btn_signals", lang), callback_data="faq_signals"),
+            InlineKeyboardButton(text=t("faq_btn_whales", lang), callback_data="faq_whales"),
+        ],
+        [
+            InlineKeyboardButton(text=t("faq_btn_options", lang), callback_data="faq_options"),
+            InlineKeyboardButton(text=t("faq_btn_ai", lang), callback_data="faq_ai"),
+        ],
+        [
+            InlineKeyboardButton(text=t("faq_btn_data", lang), callback_data="faq_data"),
+            InlineKeyboardButton(text=t("faq_btn_plans", lang), callback_data="faq_plans"),
+        ],
+        [
+            InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_main"),
+        ],
+    ])
+
+
+def kb_faq_back(lang: str = "ru"):
+    """Кнопка назад из ответа FAQ"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="◀ FAQ", callback_data="faq"),
+            InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_main"),
+        ],
+    ])
+
+
+@dp.callback_query(F.data == "faq")
+async def cb_faq(call: CallbackQuery):
+    lang = await get_user_lang(call.from_user.id)
+    await call.message.edit_text(
+        t("faq_title", lang),
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_faq(lang),
+    )
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("faq_"))
+async def cb_faq_item(call: CallbackQuery):
+    lang = await get_user_lang(call.from_user.id)
+    topic = call.data  # faq_signals, faq_whales, etc.
+    text = t(topic, lang)
+    if text == topic:
+        text = "—"  # fallback если ключ не найден
+    await call.message.edit_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_faq_back(lang),
+    )
+    await call.answer()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ЗАПУСК
