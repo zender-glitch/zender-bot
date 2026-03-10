@@ -683,7 +683,6 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
 
     lines = [
         f"<b>ZENDER TERMINAL · {coin}</b>",
-        "━━━━━━━━━━━━━━",
         "",
         f"💰 <b>{price}</b>   {ch_icon} {change}",
     ]
@@ -977,7 +976,6 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
     lines.append("t.me/ZenderTerminal_bot")
-    lines.append("━━━━━━━━━━━━━━")
 
     return "\n".join(lines)
 
@@ -993,7 +991,6 @@ def text_options_detail(coin: str, data: dict, lang: str = "ru", ai_text: str = 
 
     lines = [
         f"<b>{t('options_title', lang, coin=coin)}</b>",
-        "━━━━━━━━━━━━━━",
         "",
     ]
 
@@ -1109,7 +1106,6 @@ def text_options_detail(coin: str, data: dict, lang: str = "ru", ai_text: str = 
 
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
-    lines.append("━━━━━━━━━━━━━━")
 
     return "\n".join(lines)
 
