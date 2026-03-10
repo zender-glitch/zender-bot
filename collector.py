@@ -52,6 +52,16 @@ ETHERSCAN_BASE = "https://api.etherscan.io/api"
 # Blockchair — УБРАН (данные без контекста: кто, куда, зачем — бесполезно)
 # Вместо этого используем BGeometrics Exchange Netflow (уже подключён)
 
+# CryptoQuant (бесплатно, 50 req/day, daily) — BTC/ETH on-chain
+try:
+    from config import CRYPTOQUANT_KEY
+    HAS_CRYPTOQUANT = bool(CRYPTOQUANT_KEY)
+except (ImportError, AttributeError):
+    CRYPTOQUANT_KEY = None
+    HAS_CRYPTOQUANT = False
+
+CRYPTOQUANT_BASE = "https://api.cryptoquant.com/v1"
+
 from database import db
 
 log = logging.getLogger(__name__)
@@ -702,6 +712,123 @@ def get_cached_bgeometrics(metric: str) -> dict | list | None:
     if metric in BGEOMETRICS_CACHE:
         return BGEOMETRICS_CACHE[metric]["data"]
     return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CRYPTOQUANT (бесплатно, 50 req/day, daily resolution)
+# BTC + ETH: Exchange Reserve, Exchange Netflow, Miner Outflow
+# Кэш 12ч — максимум 8 req/day (4 метрики × 2 обновления)
+# ══════════════════════════════════════════════════════════════════════════════
+
+CRYPTOQUANT_CACHE = {}  # {endpoint: {"data": ..., "ts": time.time()}}
+CRYPTOQUANT_CACHE_TTL = 12 * 3600  # 12 часов — daily resolution, нет смысла чаще
+
+# Эндпоинты CryptoQuant (Free plan: btc, eth)
+CRYPTOQUANT_ENDPOINTS = {
+    "btc_exchange_reserve": "/v1/btc/exchange-flows/reserve?window=day&limit=1",
+    "btc_exchange_netflow": "/v1/btc/exchange-flows/netflow?window=day&limit=1",
+    "btc_miner_outflow": "/v1/btc/miner-flows/outflow?window=day&limit=1",
+    "eth_exchange_reserve": "/v1/eth/exchange-flows/reserve?window=day&limit=1",
+    "eth_exchange_netflow": "/v1/eth/exchange-flows/netflow?window=day&limit=1",
+}
+
+
+async def cryptoquant_get(endpoint_key: str) -> dict | None:
+    """Запрос к CryptoQuant API с кэшированием."""
+    if not HAS_CRYPTOQUANT:
+        return None
+
+    # Проверяем кэш
+    if endpoint_key in CRYPTOQUANT_CACHE:
+        cache = CRYPTOQUANT_CACHE[endpoint_key]
+        if (time.time() - cache["ts"]) < CRYPTOQUANT_CACHE_TTL:
+            return cache["data"]
+
+    path = CRYPTOQUANT_ENDPOINTS.get(endpoint_key)
+    if not path:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{CRYPTOQUANT_BASE}{path}",
+                headers={"Authorization": f"Bearer {CRYPTOQUANT_KEY}"}
+            )
+            if resp.status_code != 200:
+                log.warning(f"  ⚠️ CryptoQuant {endpoint_key}: HTTP {resp.status_code}")
+                return None
+            data = resp.json()
+            result = data.get("result", {}).get("data", [])
+            if result:
+                value = result[0] if isinstance(result, list) else result
+                CRYPTOQUANT_CACHE[endpoint_key] = {"data": value, "ts": time.time()}
+                log.info(f"  ✅ CryptoQuant {endpoint_key}: OK")
+                return value
+            else:
+                log.warning(f"  ⚠️ CryptoQuant {endpoint_key}: пустой ответ")
+                return None
+    except Exception as e:
+        log.warning(f"  ⚠️ CryptoQuant {endpoint_key}: {e}")
+        return None
+
+
+async def fetch_cryptoquant_data(symbol: str) -> dict:
+    """
+    Получает on-chain данные из CryptoQuant для BTC или ETH.
+    Для остальных монет — пустой словарь.
+    """
+    if not HAS_CRYPTOQUANT:
+        return {}
+    if symbol not in ("BTC", "ETH"):
+        return {}
+
+    prefix = symbol.lower()
+    result = {}
+
+    # Exchange Reserve
+    reserve = cryptoquant_get(f"{prefix}_exchange_reserve")
+    if reserve and isinstance(reserve, dict):
+        val = reserve.get("reserve") or reserve.get("value") or reserve.get("exchange_reserve")
+        if val is not None:
+            result["cq_exchange_reserve"] = float(val)
+
+    # Exchange Netflow
+    netflow = cryptoquant_get(f"{prefix}_exchange_netflow")
+    if netflow and isinstance(netflow, dict):
+        val = netflow.get("netflow") or netflow.get("value") or netflow.get("exchange_netflow")
+        if val is not None:
+            result["cq_exchange_netflow"] = float(val)
+
+    # Miner Outflow (только BTC)
+    if symbol == "BTC":
+        miner = cryptoquant_get("btc_miner_outflow")
+        if miner and isinstance(miner, dict):
+            val = miner.get("outflow") or miner.get("value") or miner.get("miner_outflow")
+            if val is not None:
+                result["cq_miner_outflow"] = float(val)
+
+    return result
+
+
+async def fetch_cryptoquant_batch():
+    """
+    Загружает все CryptoQuant метрики с кэшированием.
+    Вызывается раз за цикл collect_all().
+    """
+    if not HAS_CRYPTOQUANT:
+        return
+
+    to_fetch = [k for k in CRYPTOQUANT_ENDPOINTS
+                if k not in CRYPTOQUANT_CACHE or (time.time() - CRYPTOQUANT_CACHE[k]["ts"]) >= CRYPTOQUANT_CACHE_TTL]
+
+    if not to_fetch:
+        log.info("  🔗 CryptoQuant: все метрики в кэше (ещё актуальны)")
+        return
+
+    log.info(f"  🔗 CryptoQuant: обновляем {len(to_fetch)} метрик")
+    for key in to_fetch:
+        await cryptoquant_get(key)
+        await asyncio.sleep(1)  # Не спешим — 50 req/day
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1463,6 +1590,10 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
     bid_ask_ratio = coin_data.get("bid_ask_ratio")
     # ETH Gas (Etherscan)
     eth_gas = coin_data.get("eth_gas_avg")
+    # CryptoQuant on-chain
+    cq_exchange_reserve = coin_data.get("cq_exchange_reserve")
+    cq_exchange_netflow = coin_data.get("cq_exchange_netflow")
+    cq_miner_outflow = coin_data.get("cq_miner_outflow")
 
     # Блок on-chain + технических данных для промпта
     onchain_block = ""
@@ -1479,6 +1610,18 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
         if sopr:
             sopr_hint = "продают в прибыль" if sopr > 1 else "продают в убыток (капитуляция)" if sopr < 1 else "безубыток"
             onchain_lines.append(f"- SOPR: {sopr} — {sopr_hint}")
+
+    # CryptoQuant on-chain данные (BTC/ETH — ежедневные, 50 req/day)
+    if any([cq_exchange_reserve, cq_exchange_netflow, cq_miner_outflow]):
+        onchain_lines.append(f"\nCRYPTOQUANT ON-CHAIN ({symbol}):")
+        if cq_exchange_reserve is not None:
+            onchain_lines.append(f"- Резерв на биржах (CQ): {cq_exchange_reserve:,.0f} {symbol}")
+        if cq_exchange_netflow is not None:
+            cq_dir = "ОТТОК (бычий)" if cq_exchange_netflow < 0 else "ПРИТОК (медвежий)" if cq_exchange_netflow > 0 else "баланс"
+            onchain_lines.append(f"- Нетто поток бирж (CQ): {cq_exchange_netflow:+,.2f} {symbol} — {cq_dir}")
+        if cq_miner_outflow is not None:
+            miner_hint = "высокий отток майнеров (давление продаж)" if cq_miner_outflow > 500 else "умеренный отток майнеров" if cq_miner_outflow > 100 else "низкий отток майнеров (холдят)"
+            onchain_lines.append(f"- Отток майнеров (CQ): {cq_miner_outflow:,.2f} BTC — {miner_hint}")
 
     # Технические индикаторы
     if any([rsi, macd, sma50, sma200]):
@@ -2264,6 +2407,9 @@ async def collect_all():
     # Обновляем кэш BGeometrics (реальные запросы только если кэш устарел)
     await fetch_bgeometrics_batch()
 
+    # Обновляем CryptoQuant (кэш 12ч, 50 req/day)
+    await fetch_cryptoquant_batch()
+
     # Обновляем Coinglass индикаторы (кэш 4ч)
     await fetch_cg_indicators()
     cg_indicators = parse_cg_indicators()
@@ -2352,6 +2498,9 @@ async def collect_all():
             # On-chain данные (бесплатно, без ключа)
             gn_data = await fetch_onchain_data(symbol)
 
+            # CryptoQuant on-chain (BTC/ETH — exchange reserve, netflow, miner outflow)
+            cq_data = await fetch_cryptoquant_data(symbol)
+
             # Технические индикаторы (RSI, MACD, SMA — для не-BTC монет, из CoinGecko истории)
             tech_data = await fetch_tech_indicators(symbol)
 
@@ -2384,6 +2533,7 @@ async def collect_all():
                 **ob_data,            # Kraken Order Book: bid/ask imbalance
                 **tech_data,          # RSI, MACD, SMA50, SMA200 (для не-BTC монет)
                 **etherscan_data,     # Etherscan: ETH gas
+                **cq_data,            # CryptoQuant: exchange reserve/netflow, miner outflow
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -2465,6 +2615,9 @@ async def collect_all():
                 "fear_greed": str(coin_data.get("fear_greed", "—")),
                 "fear_greed_label": coin_data.get("fear_greed_label", "—"),
                 "eth_gas_avg": str(coin_data.get("eth_gas_avg", "—")),
+                "cq_exchange_reserve": str(round(coin_data["cq_exchange_reserve"])) if coin_data.get("cq_exchange_reserve") is not None else "—",
+                "cq_exchange_netflow": f"{coin_data['cq_exchange_netflow']:+,.2f}" if coin_data.get("cq_exchange_netflow") is not None else "—",
+                "cq_miner_outflow": f"{coin_data['cq_miner_outflow']:,.2f}" if coin_data.get("cq_miner_outflow") is not None else "—",
                 "signal": signal_bar,
                 "label": signal_label,
                 "signal_label": signal_label,
