@@ -705,6 +705,275 @@ def get_cached_bgeometrics(metric: str) -> dict | list | None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# OPTIONS DATA — Deribit (primary) + Binance + OKX (бесплатно, публичные API)
+# Put/Call Ratio, IV (Implied Volatility), Max Pain, Open Interest по опционам
+# Работает только из EU сервера (Deribit заблокирован в US)
+# Кэш 30 мин — опционы меняются быстро, но не нужно дёргать каждый цикл
+# ══════════════════════════════════════════════════════════════════════════════
+
+OPTIONS_CACHE = {}  # {key: {"data": ..., "ts": time.time()}}
+OPTIONS_CACHE_TTL = 30 * 60  # 30 минут
+
+
+async def fetch_deribit_options(symbol: str) -> dict:
+    """
+    Получает опционные данные с Deribit (JSON-RPC 2.0).
+    BTC и ETH — основные опционные рынки.
+    Возвращает: put_call_ratio, total_oi_calls, total_oi_puts, avg_iv, max_pain
+    """
+    if symbol not in ("BTC", "ETH"):
+        return {}
+
+    cache_key = f"deribit_{symbol}"
+    if cache_key in OPTIONS_CACHE and (time.time() - OPTIONS_CACHE[cache_key]["ts"]) < OPTIONS_CACHE_TTL:
+        return OPTIONS_CACHE[cache_key]["data"]
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            # Получаем book summary для всех опционов по валюте
+            resp = await client.get(
+                "https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
+                params={"currency": symbol, "kind": "option"}
+            )
+            if resp.status_code != 200:
+                log.warning(f"  ⚠️ Deribit {symbol}: HTTP {resp.status_code}")
+                return {}
+
+            data = resp.json()
+            results = data.get("result", [])
+            if not results:
+                log.warning(f"  ⚠️ Deribit {symbol}: пустой ответ")
+                return {}
+
+            # Считаем Put/Call Ratio и средний IV
+            total_oi_calls = 0.0
+            total_oi_puts = 0.0
+            iv_values = []
+            strikes_data = {}  # {strike: {"call_oi": X, "put_oi": Y}} для Max Pain
+
+            for item in results:
+                name = item.get("instrument_name", "")
+                oi = float(item.get("open_interest", 0) or 0)
+                mark_iv = item.get("mark_iv")
+
+                # Парсим тип опциона и страйк из имени: BTC-28MAR25-90000-C
+                parts = name.split("-")
+                if len(parts) < 4:
+                    continue
+                opt_type = parts[-1]  # C или P
+                try:
+                    strike = float(parts[-2])
+                except (ValueError, IndexError):
+                    continue
+
+                if opt_type == "C":
+                    total_oi_calls += oi
+                    if strike not in strikes_data:
+                        strikes_data[strike] = {"call_oi": 0, "put_oi": 0}
+                    strikes_data[strike]["call_oi"] += oi
+                elif opt_type == "P":
+                    total_oi_puts += oi
+                    if strike not in strikes_data:
+                        strikes_data[strike] = {"call_oi": 0, "put_oi": 0}
+                    strikes_data[strike]["put_oi"] += oi
+
+                if mark_iv and mark_iv > 0 and oi > 0:
+                    iv_values.append(mark_iv)
+
+            # Put/Call Ratio
+            pcr = round(total_oi_puts / total_oi_calls, 3) if total_oi_calls > 0 else None
+
+            # Средний IV (взвешенный по OI было бы лучше, но для простоты — медиана)
+            avg_iv = round(sorted(iv_values)[len(iv_values) // 2], 1) if iv_values else None
+
+            # Max Pain — страйк где сумма убытков опционных холдеров максимальна
+            max_pain = None
+            if strikes_data:
+                # Получаем текущую цену индекса
+                idx_resp = await client.get(
+                    "https://www.deribit.com/api/v2/public/get_index_price",
+                    params={"index_name": f"{symbol.lower()}_usd"}
+                )
+                index_price = None
+                if idx_resp.status_code == 200:
+                    idx_data = idx_resp.json()
+                    index_price = idx_data.get("result", {}).get("index_price")
+
+                # Считаем Max Pain: для каждого страйка суммируем ITM стоимость
+                max_pain_loss = float("inf")
+                for test_strike in sorted(strikes_data.keys()):
+                    total_loss = 0.0
+                    for s, oi_data in strikes_data.items():
+                        # Для колл: если test_strike > strike, колл ITM
+                        if test_strike > s:
+                            total_loss += oi_data["call_oi"] * (test_strike - s)
+                        # Для пут: если test_strike < strike, пут ITM
+                        if test_strike < s:
+                            total_loss += oi_data["put_oi"] * (s - test_strike)
+
+                    if total_loss < max_pain_loss:
+                        max_pain_loss = total_loss
+                        max_pain = test_strike
+
+            result = {}
+            if pcr is not None:
+                result["options_pcr"] = pcr
+            if avg_iv is not None:
+                result["options_iv"] = avg_iv
+            if max_pain is not None:
+                result["options_max_pain"] = max_pain
+            if total_oi_calls > 0:
+                result["options_oi_calls"] = round(total_oi_calls, 2)
+            if total_oi_puts > 0:
+                result["options_oi_puts"] = round(total_oi_puts, 2)
+
+            if result:
+                OPTIONS_CACHE[cache_key] = {"data": result, "ts": time.time()}
+                pcr_str = f"PCR={pcr}" if pcr else ""
+                iv_str = f"IV={avg_iv}%" if avg_iv else ""
+                mp_str = f"MaxPain=${max_pain:,.0f}" if max_pain else ""
+                log.info(f"  📊 Deribit {symbol} Options: {pcr_str} | {iv_str} | {mp_str}")
+
+            return result
+
+    except Exception as e:
+        log.warning(f"  ⚠️ Deribit {symbol} Options: {e}")
+        return {}
+
+
+async def fetch_binance_options(symbol: str) -> dict:
+    """
+    Binance European Options — дополнительный источник IV и Greeks.
+    Берём Mark IV агрегированно.
+    """
+    if symbol not in ("BTC", "ETH"):
+        return {}
+
+    cache_key = f"binance_opt_{symbol}"
+    if cache_key in OPTIONS_CACHE and (time.time() - OPTIONS_CACHE[cache_key]["ts"]) < OPTIONS_CACHE_TTL:
+        return OPTIONS_CACHE[cache_key]["data"]
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://eapi.binance.com/eapi/v1/mark",
+            )
+            if resp.status_code != 200:
+                log.warning(f"  ⚠️ Binance Options {symbol}: HTTP {resp.status_code}")
+                return {}
+
+            data = resp.json()
+            if not data:
+                return {}
+
+            # Фильтруем по символу (BTC-YYMMDD-STRIKE-C/P)
+            iv_list = []
+            for item in data:
+                inst = item.get("symbol", "")
+                if not inst.startswith(symbol):
+                    continue
+                mark_iv = item.get("markIV")
+                if mark_iv:
+                    try:
+                        iv_val = float(mark_iv)
+                        if iv_val > 0:
+                            iv_list.append(iv_val)
+                    except (ValueError, TypeError):
+                        pass
+
+            result = {}
+            if iv_list:
+                # Медианный IV
+                sorted_iv = sorted(iv_list)
+                median_iv = sorted_iv[len(sorted_iv) // 2]
+                result["binance_options_iv"] = round(median_iv * 100, 1)  # конвертируем в %
+                log.info(f"  📊 Binance Options {symbol}: IV={result['binance_options_iv']}% ({len(iv_list)} инструментов)")
+
+            if result:
+                OPTIONS_CACHE[cache_key] = {"data": result, "ts": time.time()}
+
+            return result
+
+    except Exception as e:
+        log.warning(f"  ⚠️ Binance Options {symbol}: {e}")
+        return {}
+
+
+async def fetch_okx_options(symbol: str) -> dict:
+    """
+    OKX Options — дополнительный источник IV.
+    """
+    if symbol not in ("BTC", "ETH"):
+        return {}
+
+    cache_key = f"okx_opt_{symbol}"
+    if cache_key in OPTIONS_CACHE and (time.time() - OPTIONS_CACHE[cache_key]["ts"]) < OPTIONS_CACHE_TTL:
+        return OPTIONS_CACHE[cache_key]["data"]
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://www.okx.com/api/v5/public/opt-summary",
+                params={"instFamily": f"{symbol}-USD"}
+            )
+            if resp.status_code != 200:
+                log.warning(f"  ⚠️ OKX Options {symbol}: HTTP {resp.status_code}")
+                return {}
+
+            data = resp.json()
+            items = data.get("data", [])
+            if not items:
+                return {}
+
+            iv_list = []
+            for item in items:
+                mark_vol = item.get("markVol")
+                if mark_vol:
+                    try:
+                        iv_val = float(mark_vol)
+                        if iv_val > 0:
+                            iv_list.append(iv_val)
+                    except (ValueError, TypeError):
+                        pass
+
+            result = {}
+            if iv_list:
+                sorted_iv = sorted(iv_list)
+                median_iv = sorted_iv[len(sorted_iv) // 2]
+                result["okx_options_iv"] = round(median_iv * 100, 1)
+                log.info(f"  📊 OKX Options {symbol}: IV={result['okx_options_iv']}% ({len(iv_list)} инструментов)")
+
+            if result:
+                OPTIONS_CACHE[cache_key] = {"data": result, "ts": time.time()}
+
+            return result
+
+    except Exception as e:
+        log.warning(f"  ⚠️ OKX Options {symbol}: {e}")
+        return {}
+
+
+async def fetch_options_data(symbol: str) -> dict:
+    """
+    Агрегирует опционные данные из Deribit (primary) + Binance + OKX.
+    Deribit — основной (PCR, MaxPain, IV, OI).
+    Binance/OKX — дополнительные IV для кросс-проверки.
+    """
+    if symbol not in ("BTC", "ETH"):
+        return {}
+
+    # Deribit — главный, Binance и OKX — параллельно
+    deribit_data, binance_data, okx_data = await asyncio.gather(
+        fetch_deribit_options(symbol),
+        fetch_binance_options(symbol),
+        fetch_okx_options(symbol),
+    )
+
+    combined = {**deribit_data, **binance_data, **okx_data}
+    return combined
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # COINGLASS INDICATORS (уже платим $95/мес STARTUP — используем больше endpoints!)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1555,6 +1824,30 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
         gas_hint = "высокая нагрузка" if eth_gas > 50 else "умеренная нагрузка" if eth_gas > 20 else "низкая нагрузка"
         onchain_lines.append(f"- Активность сети: {gas_hint}")
 
+    # OPTIONS DATA (Deribit + Binance + OKX)
+    opt_pcr = coin_data.get("options_pcr")
+    opt_iv = coin_data.get("options_iv")
+    opt_max_pain = coin_data.get("options_max_pain")
+    opt_oi_calls = coin_data.get("options_oi_calls")
+    opt_oi_puts = coin_data.get("options_oi_puts")
+    if any([opt_pcr, opt_iv, opt_max_pain]):
+        onchain_lines.append(f"\nОПЦИОНЫ (Deribit — крупнейший рынок криптоопционов):")
+        if opt_pcr is not None:
+            pcr_hint = "медвежий настрой (хеджируют падение)" if opt_pcr > 1.0 else "бычий настрой (ставят на рост)" if opt_pcr < 0.7 else "нейтральный"
+            onchain_lines.append(f"- Put/Call Ratio: {opt_pcr} — {pcr_hint}")
+        if opt_iv is not None:
+            iv_hint = "ВЫСОКАЯ волатильность — ожидают сильное движение" if opt_iv > 80 else "повышенная волатильность" if opt_iv > 60 else "умеренная волатильность" if opt_iv > 40 else "низкая волатильность — затишье"
+            onchain_lines.append(f"- Implied Volatility: {opt_iv}% — {iv_hint}")
+        if opt_max_pain is not None:
+            price = coin_data.get("price")
+            if price:
+                mp_dir = "цена ВЫШЕ Max Pain (давление вниз к экспирации)" if price > opt_max_pain else "цена НИЖЕ Max Pain (давление вверх к экспирации)"
+                onchain_lines.append(f"- Max Pain: ${opt_max_pain:,.0f} — {mp_dir}")
+            else:
+                onchain_lines.append(f"- Max Pain: ${opt_max_pain:,.0f}")
+        if opt_oi_calls and opt_oi_puts:
+            onchain_lines.append(f"- OI: {opt_oi_calls:,.0f} calls / {opt_oi_puts:,.0f} puts")
+
     if onchain_lines:
         onchain_block = "\n".join(onchain_lines)
 
@@ -2351,6 +2644,9 @@ async def collect_all():
             # On-chain данные (бесплатно, без ключа)
             gn_data = await fetch_onchain_data(symbol)
 
+            # Options данные: Deribit + Binance + OKX (бесплатно, EU сервер)
+            options_data = await fetch_options_data(symbol)
+
             # Технические индикаторы (RSI, MACD, SMA — для не-BTC монет, из CoinGecko истории)
             tech_data = await fetch_tech_indicators(symbol)
 
@@ -2383,6 +2679,7 @@ async def collect_all():
                 **ob_data,            # Kraken Order Book: bid/ask imbalance
                 **tech_data,          # RSI, MACD, SMA50, SMA200 (для не-BTC монет)
                 **etherscan_data,     # Etherscan: ETH gas
+                **options_data,       # Deribit + Binance + OKX: IV, PCR, MaxPain
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -2464,6 +2761,11 @@ async def collect_all():
                 "fear_greed": str(coin_data.get("fear_greed", "—")),
                 "fear_greed_label": coin_data.get("fear_greed_label", "—"),
                 "eth_gas_avg": str(coin_data.get("eth_gas_avg", "—")),
+                "options_pcr": str(coin_data.get("options_pcr", "—")),
+                "options_iv": str(coin_data.get("options_iv", "—")),
+                "options_max_pain": str(coin_data.get("options_max_pain", "—")),
+                "options_oi_calls": str(coin_data.get("options_oi_calls", "—")),
+                "options_oi_puts": str(coin_data.get("options_oi_puts", "—")),
                 "signal": signal_bar,
                 "label": signal_label,
                 "signal_label": signal_label,
