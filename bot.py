@@ -189,7 +189,7 @@ def text_radar(coins: list[str], data: dict) -> str:
     """
     lines = [
         "<b>📡 РАДАР РЫНКА</b>",
-        "━━━━━━━━━━━━━━━━━━━━",
+        "━━━━━━━━━━━━━━",
         "",
     ]
 
@@ -229,7 +229,7 @@ def text_radar(coins: list[str], data: dict) -> str:
 
     lines.append("")
     lines.append("Нажми монету для анализа ⬇")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("━━━━━━━━━━━━━━━━")
 
     return "\n".join(lines)
 
@@ -268,7 +268,7 @@ def text_coin_analysis(coin: str, data: dict) -> str:
 
     lines = [
         f"<b>ZENDER TERMINAL · {coin}</b>",
-        "━━━━━━━━━━━━━━━━━━━━",
+        "━━━━━━━━━━━━━━",
         "",
         f"💰 <b>{price}</b>   {ch_icon} {change}",
     ]
@@ -525,7 +525,8 @@ def text_coin_analysis(coin: str, data: dict) -> str:
 
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("t.me/ZenderTerminal_bot")
+    lines.append("━━━━━━━━━━━━━━")
 
     return "\n".join(lines)
 
