@@ -251,11 +251,31 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
 🟩🟩🟩⬜⬜ средний — большинство совпадает
 🟩🟩🟩🟩🟩 сильный — всё в одну сторону
 
-<b>Вероятность движения</b> — % на рост vs падение. Считается из соотношения бычьих/медвежьих факторов + качества сетапа.
+<b>📊 Market Pressure Gauge</b> — визуальная шкала давления рынка. Показывает кто сейчас сильнее — быки или медведи. Рассчитывается из всех бычьих/медвежьих факторов + качества сетапа.
+🐂 ████████░░ 72% = быки доминируют
+🐻 ██████████ 85% = сильное медвежье давление
+
+<b>🤖 AI Score</b> — итоговая оценка рынка от 0 до 100:
+• 70-100 🟢 STRONG BUY — всё указывает на рост
+• 60-69 🟡 BUY — большинство факторов бычьи
+• 45-59 ⚪ NEUTRAL — равновесие или неопределённость
+• 30-44 🟡 SELL — большинство факторов медвежьи
+• 0-29 🔴 STRONG SELL — всё указывает на падение
+Показывает топ-факторы: за рост и за падение.
 
 <b>⚠️ Ловушки</b>
 «Шорты в ловушке» — шортисты переплатили (funding отрицательный), их ликвидируют. Возможен short squeeze — резкий рост из-за каскадных ликвидаций шортов.
 «Лонги в ловушке» — лонгисты перегружены, возможен long squeeze — резкое падение.
+
+<b>OI Structure (OI Delta Trap)</b>
+Комбинация изменения цены и Open Interest — показывает настоящий ли это тренд:
+• Цена ↑ + OI ↑ = новые лонги, тренд подтверждён
+• Цена ↑ + OI ↓ = short squeeze, рост на ликвидациях
+• Цена ↓ + OI ↑ = новые шорты, давление вниз
+• Цена ↓ + OI ↓ = капитуляция лонгов, возможен отскок
+
+<b>Liquidation Pressure</b>
+Показывает кого сейчас выносят с рынка — лонгов или шортов, в процентах.
 
 ⚠️ Это не финансовый совет. Всегда проверяй сам.""",
 
@@ -614,11 +634,31 @@ A signal is the result of analyzing 30+ market indicators through a 3-layer pipe
 🟩🟩🟩⬜⬜ medium — most agree
 🟩🟩🟩🟩🟩 strong — all point one way
 
-<b>Probability</b> — % up vs down. Calculated from bull/bear factor ratio + setup quality.
+<b>📊 Market Pressure Gauge</b> — visual market pressure scale. Shows who's stronger — bulls or bears. Calculated from all bull/bear factors + setup quality.
+🐂 ████████░░ 72% = bulls dominate
+🐻 ██████████ 85% = strong bearish pressure
+
+<b>🤖 AI Score</b> — overall market score from 0 to 100:
+• 70-100 🟢 STRONG BUY — everything points to growth
+• 60-69 🟡 BUY — most factors are bullish
+• 45-59 ⚪ NEUTRAL — equilibrium or uncertainty
+• 30-44 🟡 SELL — most factors are bearish
+• 0-29 🔴 STRONG SELL — everything points to decline
+Shows top drivers: bullish and bearish factors.
 
 <b>⚠️ Traps</b>
 "Shorts trapped" — shorters overpaid (negative funding), getting liquidated. Possible short squeeze — rapid rise from cascading short liquidations.
 "Longs trapped" — longs overleveraged, possible long squeeze — rapid drop.
+
+<b>OI Structure (OI Delta Trap)</b>
+Combines price and Open Interest changes to reveal true trend:
+• Price ↑ + OI ↑ = new longs, trend confirmed
+• Price ↑ + OI ↓ = short squeeze, growth on liquidations
+• Price ↓ + OI ↑ = new shorts, pressure down
+• Price ↓ + OI ↓ = long capitulation, bounce possible
+
+<b>Liquidation Pressure</b>
+Shows who is being liquidated right now — longs or shorts, in percentages.
 
 ⚠️ Not financial advice. Always DYOR.""",
 
@@ -1017,12 +1057,22 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
         r_icon  = _rec_icon(rec)
         r_label = _rec_label(rec, lang)
 
+        # AI Score для радара
+        ai_sc_str = d.get("ai_score", "")
+        ai_sc_part = ""
+        if ai_sc_str and ai_sc_str != "50":
+            try:
+                ai_sc_val = int(float(str(ai_sc_str)))
+                ai_sc_part = f" AI:{ai_sc_val}"
+            except (ValueError, TypeError):
+                pass
+
         # Форматируем цену и change для моноширинного выравнивания
         price_str = str(price)
         change_str = str(change)
 
         # Вся строка в <code> для моноширинного шрифта + иконка рекомендации снаружи
-        lines.append(f"{r_icon} <code>{coin:<5} {price_str:>10} {change_str:>8}  {r_label}</code>")
+        lines.append(f"{r_icon} <code>{coin:<5} {price_str:>10} {change_str:>8}  {r_label}{ai_sc_part}</code>")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
@@ -1079,11 +1129,68 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     rec_label = _rec_label(recommendation, lang)
     strength_label = strength.upper() if strength else ""
 
+    # ══════════════════════════════════════════════════════════════
+    # ВИРУСНАЯ КАРТОЧКА (первые строки — видны при пересылке)
+    # ══════════════════════════════════════════════════════════════
     lines = [
-        f"<b>ZENDER TERMINAL · {coin}</b>",
+        f"<b>⚡ ZENDER TERMINAL</b>",
         "",
-        f"💰 <b>{price}</b>   {ch_icon} {change}",
+        f"<b>{coin}</b>  {price}  {ch_icon} {change}",
     ]
+
+    # AI Score в карточке
+    ai_score_str = d.get("ai_score", "")
+    ai_score_label_val = d.get("ai_score_label", "")
+    if ai_score_str and ai_score_str != "50":
+        try:
+            ai_sc = int(float(str(ai_score_str)))
+            if ai_sc >= 70:
+                sc_icon = "🟢"
+            elif ai_sc >= 60:
+                sc_icon = "🟡"
+            elif ai_sc >= 45:
+                sc_icon = "⚪"
+            elif ai_sc >= 30:
+                sc_icon = "🟡"
+            else:
+                sc_icon = "🔴"
+            lines.append(f"AI SCORE: {sc_icon} {ai_sc}/100 — {ai_score_label_val}")
+        except (ValueError, TypeError):
+            pass
+
+    # Сигнал в карточке
+    if recommendation:
+        sig_line = f"{t('signal', lang).upper()}: {rec_icon} {rec_label}"
+        if strength_label:
+            sig_line += f" ({strength_label})"
+        lines.append(sig_line)
+
+    # Уверенность в карточке
+    conf_bar = d.get("confidence_bar", "")
+    conf_label_val = d.get("confidence_label", "")
+    if conf_bar and conf_label_val:
+        conf_lbl = "УВЕРЕННОСТЬ" if lang == "ru" else "CONFIDENCE"
+        lines.append(f"{conf_lbl}: {conf_bar}")
+
+    # Уровни в карточке (компактно)
+    levels_parts = []
+    if target:
+        tgt_lbl = "ЦЕЛЬ" if lang == "ru" else "TARGET"
+        levels_parts.append(f"{tgt_lbl}: {html_lib.escape(target)}")
+    if stop:
+        stp_lbl = "СТОП" if lang == "ru" else "STOP"
+        levels_parts.append(f"{stp_lbl}: {html_lib.escape(stop)}")
+    if levels_parts:
+        lines.append("  ".join(levels_parts))
+
+    # Горизонт в карточке
+    horizon = _clean(d.get("horizon", ""))
+    if horizon:
+        lines.append(f"⏱ {html_lib.escape(horizon)}")
+
+    # ══════════════════════════════════════════════════════════════
+    # ПОЛНЫЙ АНАЛИЗ (после карточки)
+    # ══════════════════════════════════════════════════════════════
 
     # ── ЧТО ПРОИСХОДИТ ──
     if what_happening:
@@ -1097,26 +1204,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         lines.append(f"⚠️ <b>{t('trap', lang)}</b>")
         lines.append(html_lib.escape(trap))
 
-    # ── СИГНАЛ ──
-    if recommendation:
-        lines.append("")
-        sig_text = f"📊 <b>{t('signal', lang)}:</b> {rec_icon} {rec_label}"
-        if strength_label:
-            sig_text += f" ({strength_label})"
-        lines.append(sig_text)
-
-    # ── УВЕРЕННОСТЬ СИГНАЛА ──
-    conf_bar = d.get("confidence_bar", "")
-    conf_label = d.get("confidence_label", "")
-    if conf_bar and conf_label:
-        lines.append(f"🎯 {conf_bar} {html_lib.escape(conf_label)}")
-
-    # ── ГОРИЗОНТ ──
-    horizon = _clean(d.get("horizon", ""))
-    if horizon:
-        lines.append(f"⏱ {html_lib.escape(horizon)}")
-
-    # ── ВЕРОЯТНОСТЬ ДВИЖЕНИЯ ──
+    # ── MARKET PRESSURE GAUGE (визуальная шкала быки/медведи) ──
     prob_bull = d.get("prob_bull")
     prob_bear = d.get("prob_bear")
     if prob_bull is not None and prob_bear is not None:
@@ -1125,10 +1213,41 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
             pr = int(float(str(prob_bear)))
             if pb != 50 or pr != 50:
                 lines.append("")
-                lines.append(f"🎯 <b>{t('probability_title', lang)}</b>")
-                lines.append(f"⬆️ {t('prob_up', lang)}: {pb}%  /  ⬇️ {t('prob_down', lang)}: {pr}%")
+                gauge_title = "ДАВЛЕНИЕ РЫНКА" if lang == "ru" else "MARKET PRESSURE"
+                lines.append(f"<b>📊 {gauge_title}</b>")
+                # Визуальная полоса: 10 блоков
+                bull_blocks = round(pb / 10)
+                bear_blocks = 10 - bull_blocks
+                bar = "█" * bull_blocks + "░" * bear_blocks
+                if pb >= pr:
+                    lines.append(f"<code>🐂 {bar} {pb}%</code>")
+                    if lang == "ru":
+                        hint = "быки доминируют" if pb >= 65 else "лёгкое преимущество быков"
+                    else:
+                        hint = "bulls dominate" if pb >= 65 else "slight bull advantage"
+                else:
+                    lines.append(f"<code>🐻 {bar} {pr}%</code>")
+                    if lang == "ru":
+                        hint = "медведи доминируют" if pr >= 65 else "лёгкое преимущество медведей"
+                    else:
+                        hint = "bears dominate" if pr >= 65 else "slight bear advantage"
+                lines.append(f"<i>{hint}</i>")
         except (ValueError, TypeError):
             pass
+
+    # ── AI SCORE DRIVERS (причины — подробности карточки) ──
+    top_bull = d.get("top_factors_bull", "")
+    top_bear = d.get("top_factors_bear", "")
+    if top_bull or top_bear:
+        lines.append("")
+        drv_title = "ПРИЧИНЫ" if lang == "ru" else "DRIVERS"
+        lines.append(f"<b>🤖 {drv_title}</b>")
+        if top_bull:
+            bull_lbl = "За рост" if lang == "ru" else "Bullish"
+            lines.append(f"  ⬆️ {bull_lbl}: {html_lib.escape(top_bull)}")
+        if top_bear:
+            bear_lbl = "За падение" if lang == "ru" else "Bearish"
+            lines.append(f"  ⬇️ {bear_lbl}: {html_lib.escape(top_bear)}")
 
     # ── КОНФЛИКТ FUNDING ──
     funding_conflict = _clean(d.get("funding_conflict", ""))
@@ -1203,6 +1322,39 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
             else:
                 oi_hint = t("oi_stable", lang)
             lines.append(f"📊 {t('oi_label', lang)}: {oi_chg} ({oi_hint})")
+
+            # ── OI STRUCTURE (OI Delta Trap) ──
+            # Цена↑ + OI↑ = тренд подтверждён, Цена↑ + OI↓ = short squeeze
+            # Цена↓ + OI↑ = давление продавцов, Цена↓ + OI↓ = капитуляция лонгов
+            try:
+                price_chg = float(str(change).replace("%", "").replace("+", "").replace("−", "-").replace("–", "-"))
+                price_up = price_chg > 0.3
+                price_dn = price_chg < -0.3
+                oi_up = oi_v > 0.3
+                oi_dn = oi_v < -0.3
+
+                if price_up and oi_up:
+                    _oi_trap_ru = "новые лонги заходят — тренд подтверждён"
+                    _oi_trap_en = "new longs entering — trend confirmed"
+                elif price_up and oi_dn:
+                    _oi_trap_ru = "short squeeze — рост на ликвидациях"
+                    _oi_trap_en = "short squeeze — growth on liquidations"
+                elif price_dn and oi_up:
+                    _oi_trap_ru = "новые шорты заходят — давление вниз"
+                    _oi_trap_en = "new shorts entering — pressure down"
+                elif price_dn and oi_dn:
+                    _oi_trap_ru = "капитуляция лонгов — возможен отскок"
+                    _oi_trap_en = "long capitulation — bounce possible"
+                else:
+                    _oi_trap_ru = None
+                    _oi_trap_en = None
+
+                if _oi_trap_ru:
+                    _price_arrow = "↑" if price_up else "↓"
+                    _oi_arrow = "↑" if oi_up else "↓"
+                    lines.append(f"→ Price {_price_arrow} + OI {_oi_arrow}: {_oi_trap_ru if lang == 'ru' else _oi_trap_en}")
+            except (ValueError, TypeError):
+                pass
         except (ValueError, TypeError):
             lines.append(f"📊 {t('oi_label', lang)}: {oi_chg}")
 
@@ -1436,16 +1588,28 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
                 ld = float(str(liq_dn).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
                 up_arrow = " ↑" if lu > ld else ""
                 dn_arrow = " ↑" if ld > lu else ""
-                lines.append(f"{t('liq_shorts', lang)}: {liq_up}{up_arrow}")
-                lines.append(f"{t('liq_longs', lang)}: {liq_dn}{dn_arrow}")
+                lines.append(f"🟢 {t('liq_shorts', lang)}: {liq_up}{up_arrow}")
+                lines.append(f"🔴 {t('liq_longs', lang)}: {liq_dn}{dn_arrow}")
+
+                # ── Liquidation Pressure ──
+                total_liq = lu + ld
+                if total_liq > 0:
+                    short_pressure = round(lu / total_liq * 100)
+                    long_pressure = 100 - short_pressure
+                    if short_pressure > 60:
+                        _press_hint = "давление вверх (шортов выносят)" if lang == "ru" else "upward pressure (shorts squeezed)"
+                        lines.append(f"→ Short pressure: {short_pressure}% — {_press_hint}")
+                    elif long_pressure > 60:
+                        _press_hint = "давление вниз (лонгов выносят)" if lang == "ru" else "downward pressure (longs liquidated)"
+                        lines.append(f"→ Long pressure: {long_pressure}% — {_press_hint}")
             except (ValueError, TypeError):
-                lines.append(f"{t('liq_shorts', lang)}: {liq_up}")
-                lines.append(f"{t('liq_longs', lang)}: {liq_dn}")
+                lines.append(f"🟢 {t('liq_shorts', lang)}: {liq_up}")
+                lines.append(f"🔴 {t('liq_longs', lang)}: {liq_dn}")
         else:
             if _has(liq_up):
-                lines.append(f"{t('liq_shorts', lang)}: {liq_up}")
+                lines.append(f"🟢 {t('liq_shorts', lang)}: {liq_up}")
             if _has(liq_dn):
-                lines.append(f"{t('liq_longs', lang)}: {liq_dn}")
+                lines.append(f"🔴 {t('liq_longs', lang)}: {liq_dn}")
 
     # Вход / Стоп / Цель
     if entry or stop or target:

@@ -3450,6 +3450,38 @@ async def collect_all():
             conf_bar = pipeline["confidence_bar"]
             conf_label = pipeline["confidence_label"]
 
+            # ══ AI SCORE (нормализация pipeline score в 0-100) ══
+            raw_score = pipeline.get("score", 0)  # обычно от -3 до +7
+            dir_code = pipeline.get("direction", "SIDEWAYS")
+            dir_bull = pipeline.get("dir_bull", 0)
+            dir_bear = pipeline.get("dir_bear", 0)
+
+            # Нормализуем: raw_score от -3..+7 → 0..100
+            # Центр (score=0) = 50, каждый +1 = +7 баллов
+            ai_score_raw = 50 + (raw_score * 7)
+            # Добавляем перекос от направления (dir_bull vs dir_bear)
+            total_dir = dir_bull + dir_bear
+            if total_dir > 0:
+                dir_bias = ((dir_bull - dir_bear) / total_dir) * 15  # до ±15
+                ai_score_raw += dir_bias
+            ai_score = max(0, min(100, round(ai_score_raw)))
+
+            # Лейбл AI Score
+            if ai_score >= 70:
+                ai_score_label = "STRONG BUY"
+            elif ai_score >= 60:
+                ai_score_label = "BUY"
+            elif ai_score >= 45:
+                ai_score_label = "NEUTRAL"
+            elif ai_score >= 30:
+                ai_score_label = "SELL"
+            else:
+                ai_score_label = "STRONG SELL"
+
+            # Топ факторы для отображения (берём из pipeline)
+            top_factors_bull = ", ".join(pipeline.get("dir_factors_bull", [])[:3])
+            top_factors_bear = ", ".join(pipeline.get("dir_factors_bear", [])[:3])
+
             # Рассчитываем карту ликвидности
             liq_levels = calculate_liquidation_levels(coin_data)
 
@@ -3564,6 +3596,10 @@ async def collect_all():
                 "prob_bull": str(llm_data.get("prob_bull", 50)),
                 "prob_bear": str(llm_data.get("prob_bear", 50)),
                 "funding_conflict": llm_data.get("funding_conflict", ""),
+                "ai_score": str(ai_score),
+                "ai_score_label": ai_score_label,
+                "top_factors_bull": top_factors_bull,
+                "top_factors_bear": top_factors_bear,
                 "recommendation": llm_data.get("recommendation", ""),
                 "strength": llm_data.get("strength", ""),
                 "entry": llm_data.get("entry", ""),
