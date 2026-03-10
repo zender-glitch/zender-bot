@@ -995,10 +995,12 @@ BINANCE_FUTURES_MAP = {
 
 async def fetch_cvd(symbol: str) -> dict:
     """
-    CVD из Binance Futures taker buy/sell volume.
-    Берём последние 3 свечи по 5 мин (= 15 мин окно).
-    CVD = sum(takerBuyVolValue) - sum(takerSellVolValue) за это окно.
-    Также считаем тренд: растёт CVD или падает (сравниваем с предыдущим окном).
+    CVD из Binance Futures Aggr Trades.
+    Берём последние 1000 сделок (aggrTrades) и считаем:
+    CVD = sum(qty где maker=True) - sum(qty где maker=False)
+    maker=True значит покупатель был maker → это market SELL
+    maker=False значит покупатель был taker → это market BUY
+    Также берём takerlongshortRatio как дополнительный сигнал.
     """
     ticker = BINANCE_FUTURES_MAP.get(symbol)
     if not ticker:
@@ -1009,36 +1011,55 @@ async def fetch_cvd(symbol: str) -> dict:
         return CVD_CACHE[cache_key]["data"]
 
     try:
-        url = f"{BINANCE_FUTURES_BASE}/futures/data/takerlongshortRatio"
-        # Также берём raw taker buy/sell volume
-        vol_url = f"{BINANCE_FUTURES_BASE}/futures/data/takerBuySellVol"
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(vol_url, params={
-                "symbol": ticker,
-                "period": "5m",
-                "limit": 6,  # 6 свечей по 5 мин = 30 мин: 3 текущих + 3 предыдущих
-            })
-            if resp.status_code != 200:
-                log.warning(f"  ⚠️ CVD {symbol}: Binance status={resp.status_code}")
-                return {}
-            data = resp.json()
-            if not data or len(data) < 6:
-                # Если мало данных, берём что есть
-                if not data:
-                    return {}
+            # 1. Aggr Trades — реальные сделки для CVD
+            trades_resp = await client.get(
+                f"{BINANCE_FUTURES_BASE}/fapi/v1/aggTrades",
+                params={"symbol": ticker, "limit": 1000}
+            )
 
-        # data отсортирован по времени (старые → новые)
-        # Считаем CVD для двух окон
-        prev_window = data[:3] if len(data) >= 6 else []
-        curr_window = data[-3:] if len(data) >= 3 else data
+            # 2. Taker L/S Ratio — дополнительный сигнал
+            ratio_resp = await client.get(
+                f"{BINANCE_FUTURES_BASE}/futures/data/takerlongshortRatio",
+                params={"symbol": ticker, "period": "5m", "limit": 6}
+            )
 
-        def calc_cvd(window):
-            buy_vol = sum(float(c.get("buyVol", 0)) for c in window)
-            sell_vol = sum(float(c.get("sellVol", 0)) for c in window)
-            return buy_vol - sell_vol
+        cvd_value = 0.0
+        if trades_resp.status_code == 200:
+            trades = trades_resp.json()
+            if trades:
+                # Считаем CVD: market buy (+) vs market sell (-)
+                # m=True → buyer is maker → taker SOLD → это sell
+                # m=False → buyer is taker → taker BOUGHT → это buy
+                mid_point = len(trades) // 2
+                price = float(trades[-1]["p"]) if trades else 1
 
-        cvd_current = calc_cvd(curr_window)
-        cvd_previous = calc_cvd(prev_window) if prev_window else 0
+                def calc_cvd_window(window):
+                    delta = 0.0
+                    for t in window:
+                        qty_usd = float(t["q"]) * float(t["p"])
+                        if t["m"]:  # buyer is maker = market sell
+                            delta -= qty_usd
+                        else:       # buyer is taker = market buy
+                            delta += qty_usd
+                    return delta
+
+                cvd_current = calc_cvd_window(trades[mid_point:])
+                cvd_previous = calc_cvd_window(trades[:mid_point])
+                cvd_value = cvd_current
+        else:
+            log.warning(f"  ⚠️ CVD {symbol}: aggTrades status={trades_resp.status_code}")
+            cvd_current = 0
+            cvd_previous = 0
+
+        # Taker L/S ratio для дополнительного контекста
+        taker_buy_ratio = None
+        if ratio_resp.status_code == 200:
+            ratio_data = ratio_resp.json()
+            if ratio_data:
+                # buySellRatio > 1 = больше покупателей, < 1 = больше продавцов
+                latest = ratio_data[-1]
+                taker_buy_ratio = float(latest.get("buySellRatio", 1))
 
         # Определяем тренд CVD
         if cvd_previous != 0:
@@ -1050,12 +1071,14 @@ async def fetch_cvd(symbol: str) -> dict:
         cvd_side = "buyers" if cvd_current > 0 else "sellers"
 
         result = {
-            "cvd_value": round(cvd_current, 2),
+            "cvd_value": round(cvd_value / 1e6, 2),  # в миллионах USD
             "cvd_trend": cvd_trend,    # rising / falling
             "cvd_side": cvd_side,      # buyers / sellers
         }
+        if taker_buy_ratio is not None:
+            result["taker_buy_ratio"] = round(taker_buy_ratio, 3)
         CVD_CACHE[cache_key] = {"data": result, "ts": time.time()}
-        log.info(f"  📊 CVD {symbol}: {cvd_current:+.1f} ({cvd_trend}, {cvd_side})")
+        log.info(f"  📊 CVD {symbol}: {result['cvd_value']:+.2f}M ({cvd_trend}, {cvd_side})")
         return result
 
     except Exception as e:
@@ -2054,7 +2077,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
         if cvd_value is not None:
             cvd_arrow = "↑" if cvd_trend == "rising" else "↓"
             cvd_who = "покупатели давят" if cvd_side == "buyers" else "продавцы давят"
-            onchain_lines.append(f"- CVD (15m): {cvd_arrow} {cvd_value:+.1f} — {cvd_who}")
+            onchain_lines.append(f"- CVD: {cvd_arrow} ${cvd_value:+.1f}M — {cvd_who}")
             # Дивергенция CVD vs цена — самый сильный сигнал!
             if change is not None:
                 try:
