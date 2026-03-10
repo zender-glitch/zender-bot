@@ -1615,10 +1615,10 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
 - НЕ ПИШИ БОЛЬШЕ 4 СТРОК
 
 ОТВЕТЬ СТРОГО В ФОРМАТЕ (4 строки, не больше):
-ЧТО_ПРОИСХОДИТ: [одно предложение, до 80 символов]
-ВХОД: [$XXX,XXX]
-СТОП: [$XXX,XXX]
-ЦЕЛЬ: [$XXX,XXX]"""
+ЧТО_ПРОИСХОДИТ: одно предложение, до 80 символов
+ВХОД: $XXX,XXX
+СТОП: $XXX,XXX
+ЦЕЛЬ: $XXX,XXX"""
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -1659,13 +1659,13 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
                         result["what_happening"] = clean_val
                 elif upper.startswith("ВХОД:"):
                     if val:
-                        result["entry"] = val.strip()
+                        result["entry"] = val.strip().replace("[", "").replace("]", "")
                 elif upper.startswith("СТОП:"):
                     if val:
-                        result["stop"] = val.strip()
+                        result["stop"] = val.strip().replace("[", "").replace("]", "")
                 elif upper.startswith("ЦЕЛЬ:"):
                     if val:
-                        result["target"] = val.strip()
+                        result["target"] = val.strip().replace("[", "").replace("]", "")
 
             # Fallback: если what_happening не нашли — берём первую длинную строку
             if not result.get("what_happening") and text:
