@@ -1055,24 +1055,22 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
         change = d.get("change", "—")
         rec    = d.get("recommendation", "")
         r_icon  = _rec_icon(rec)
-        r_label = _rec_label(rec, lang)
 
-        # AI Score для радара
-        ai_sc_str = d.get("ai_score", "")
-        ai_sc_part = ""
-        if ai_sc_str and ai_sc_str != "50":
-            try:
-                ai_sc_val = int(float(str(ai_sc_str)))
-                ai_sc_part = f" AI:{ai_sc_val}"
-            except (ValueError, TypeError):
-                pass
+        # Короткий код сигнала с символом направления (вариант C)
+        r = str(rec).lower()
+        if "покупать" in r or "buy" in r:
+            sig_code = "▲BUY" if lang == "en" else "▲ПОКУПАТЬ"
+        elif "продавать" in r or "sell" in r:
+            sig_code = "▼SELL" if lang == "en" else "▼ПРОДАВАТЬ"
+        else:
+            sig_code = "●HOLD" if lang == "en" else "●ДЕРЖАТЬ"
 
         # Форматируем цену и change для моноширинного выравнивания
         price_str = str(price)
         change_str = str(change)
 
-        # Вся строка в <code> для моноширинного шрифта + иконка рекомендации снаружи
-        lines.append(f"{r_icon} <code>{coin:<5} {price_str:>10} {change_str:>8}  {r_label}{ai_sc_part}</code>")
+        # Всё в одну строку: иконка монета цена изменение сигнал
+        lines.append(f"{r_icon} <code>{coin:<5} {price_str:>10} {change_str:>8}  {sig_code}</code>")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
