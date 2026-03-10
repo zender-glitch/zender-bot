@@ -2633,7 +2633,7 @@ def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict
             conf_level = 1
             conf_label = "слабая"
 
-    conf_bars = "█" * conf_level + "░" * (5 - conf_level)
+    conf_bars = "🟩" * conf_level + "⬜" * (5 - conf_level)
 
     # ── СИГНАЛ (направление + сила) ──
     if dir_code == "UP" and quality in ("STRONG", "MEDIUM"):
@@ -2657,7 +2657,7 @@ def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict
         strength = "слабо"
         sig_normalized = 1
 
-    signal_bar = "▓" * sig_normalized + "░" * (5 - sig_normalized)
+    signal_bar = "🟩" * sig_normalized + "⬜" * (5 - sig_normalized)
     signal_label = strength.upper()
 
     # Горизонт
