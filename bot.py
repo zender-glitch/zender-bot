@@ -387,7 +387,34 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
 
 <b>Важно:</b> AI НЕ принимает решение сам — он только объясняет то, что посчитал алгоритм. Решения rule-based (по правилам), а не по "мнению" нейросети.
 
-temperature = 0 — ответы детерминированные, без рандома.""",
+temperature = 0 — ответы детерминированные, без рандома.
+
+<b>🎯 AI ОЦЕНКА (AI Score)</b>
+
+Числовая оценка от 0 до 100 — единый показатель, который объединяет ВСЕ данные pipeline в одно число.
+
+<b>Как считается:</b>
+• Базовый score алгоритма (направление, качество сетапа) нормализуется в шкалу 0–100
+• Добавляется корректировка по соотношению бычьих/медвежьих факторов (±15)
+• Чем больше метрик "за" — тем выше оценка
+
+<b>Шкала:</b>
+🟢 70–100 — СИЛЬНАЯ ПОКУПКА (3+ бычьих фактора, сильный сетап)
+🟡 60–69 — ПОКУПКА (преимущество быков)
+⚪ 45–59 — НЕЙТРАЛЬНО (факторы противоречат или слабый сигнал)
+🟡 30–44 — ПРОДАЖА (преимущество медведей)
+🔴 0–29 — СИЛЬНАЯ ПРОДАЖА (3+ медвежьих фактора)
+
+<b>Драйверы:</b> под AI оценкой показаны конкретные причины — какие метрики толкают "за рост" (⬆️) и "за падение" (⬇️). Например: "BUY давление сильное, шорты переплачивают" или "лонгов ликвидируют, киты заводят на биржи".
+
+<b>📊 ДАВЛЕНИЕ РЫНКА (Market Pressure)</b>
+
+Визуальная шкала 🐂 ████████░░ 72% — показывает баланс сил быков и медведей.
+
+• Считается из вероятностей бычьего/медвежьего движения
+• 🐂 больше 60% — быки доминируют
+• 🐻 меньше 40% — медведи доминируют
+• 40–60% — силы примерно равны""",
 
         "faq_data": """<b>📡 Откуда данные?</b>
 
@@ -770,7 +797,34 @@ The bot uses Claude AI (by Anthropic) to analyze each coin.
 
 <b>Important:</b> AI does NOT make decisions — it only explains what the algorithm calculated. Decisions are rule-based, not neural network "opinions."
 
-temperature = 0 — deterministic responses, no randomness.""",
+temperature = 0 — deterministic responses, no randomness.
+
+<b>🎯 AI SCORE</b>
+
+A numerical score from 0 to 100 — a single metric that combines ALL pipeline data into one number.
+
+<b>How it's calculated:</b>
+• Base algorithm score (direction, setup quality) is normalized to 0–100
+• Adjusted by bull/bear factor ratio (±15)
+• More metrics "for" = higher score
+
+<b>Scale:</b>
+🟢 70–100 — STRONG BUY (3+ bullish factors, strong setup)
+🟡 60–69 — BUY (bulls have advantage)
+⚪ 45–59 — NEUTRAL (conflicting factors or weak signal)
+🟡 30–44 — SELL (bears have advantage)
+🔴 0–29 — STRONG SELL (3+ bearish factors)
+
+<b>Drivers:</b> below AI score you'll see specific reasons — which metrics push "bullish" (⬆️) and "bearish" (⬇️). For example: "BUY pressure strong, shorts overpaying" or "longs liquidated, whales depositing to exchanges."
+
+<b>📊 MARKET PRESSURE</b>
+
+Visual gauge 🐂 ████████░░ 72% — shows bull/bear balance of power.
+
+• Calculated from bull/bear movement probabilities
+• 🐂 above 60% — bulls dominate
+• 🐻 below 40% — bears dominate
+• 40–60% — forces roughly equal""",
 
         "faq_data": """<b>📡 Where does data come from?</b>
 
@@ -1152,7 +1206,20 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
                 sc_icon = "🟡"
             else:
                 sc_icon = "🔴"
-            lines.append(f"AI SCORE: {sc_icon} {ai_sc}/100 — {ai_score_label_val}")
+            # Перевод лейбла AI Score
+            _ai_labels_ru = {
+                "STRONG BUY": "СИЛЬНАЯ ПОКУПКА",
+                "BUY": "ПОКУПКА",
+                "NEUTRAL": "НЕЙТРАЛЬНО",
+                "SELL": "ПРОДАЖА",
+                "STRONG SELL": "СИЛЬНАЯ ПРОДАЖА",
+            }
+            if lang == "ru":
+                ai_label_display = _ai_labels_ru.get(ai_score_label_val, ai_score_label_val)
+            else:
+                ai_label_display = ai_score_label_val
+            ai_title = "AI ОЦЕНКА" if lang == "ru" else "AI SCORE"
+            lines.append(f"{ai_title}: {sc_icon} {ai_sc}/100 — {ai_label_display}")
         except (ValueError, TypeError):
             pass
 
