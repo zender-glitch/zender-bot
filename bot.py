@@ -78,15 +78,18 @@ def kb_back_to_summary():
         [InlineKeyboardButton(text="◀ Назад к радару", callback_data="radar")]
     ])
 
-def kb_intervals():
-    """Выбор интервала обновления"""
+def kb_settings(alerts_on: bool = True):
+    """Настройки: интервал + алерты вкл/выкл"""
+    alert_text = "🔔 Алерты: ВКЛ" if alerts_on else "🔕 Алерты: ВЫКЛ"
+    alert_cb = "toggle_alerts_off" if alerts_on else "toggle_alerts_on"
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="5 мин",  callback_data="interval_5"),
             InlineKeyboardButton(text="15 мин", callback_data="interval_15"),
             InlineKeyboardButton(text="1 час",  callback_data="interval_60"),
         ],
-        [InlineKeyboardButton(text="◀ Назад", callback_data="settings")],
+        [InlineKeyboardButton(text=alert_text, callback_data=alert_cb)],
+        [InlineKeyboardButton(text="◀ Назад", callback_data="back_main")],
     ])
 
 def kb_subscription():
@@ -562,13 +565,16 @@ async def cmd_settings(message: Message):
     user    = await db.get_user(user_id)
     plan    = user.get("plan", "free") if user else "free"
     interval= user.get("interval", 15) if user else 15
+    alerts  = user.get("alerts_enabled", True) if user else True
+    alert_status = "🔔 Включены" if alerts else "🔕 Выключены"
     await message.answer(
         f"<b>⚙️ Настройки</b>\n\n"
         f"Тариф: <b>{plan.upper()}</b>\n"
-        f"Обновление: <b>каждые {interval} мин</b>\n\n"
+        f"Обновление: <b>каждые {interval} мин</b>\n"
+        f"Алерты: <b>{alert_status}</b>\n\n"
         f"Выбери интервал обновления:",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_intervals()
+        reply_markup=kb_settings(alerts)
     )
 
 
@@ -653,13 +659,16 @@ async def cb_settings(call: CallbackQuery):
     user    = await db.get_user(user_id)
     plan    = user.get("plan", "free") if user else "free"
     interval= user.get("interval", 15) if user else 15
+    alerts  = user.get("alerts_enabled", True) if user else True
+    alert_status = "🔔 Включены" if alerts else "🔕 Выключены"
     await call.message.edit_text(
         f"<b>⚙️ Настройки</b>\n\n"
         f"Тариф: <b>{plan.upper()}</b>\n"
-        f"Обновление: <b>каждые {interval} мин</b>\n\n"
+        f"Обновление: <b>каждые {interval} мин</b>\n"
+        f"Алерты: <b>{alert_status}</b>\n\n"
         f"Выбери интервал обновления:",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_intervals()
+        reply_markup=kb_settings(alerts)
     )
     await call.answer()
 
@@ -669,7 +678,43 @@ async def cb_interval(call: CallbackQuery):
     interval = int(call.data.replace("interval_", ""))
     user_id  = call.from_user.id
     await db.update_user(user_id, {"interval": interval})
-    await call.answer(f"✅ Интервал установлен: {interval} мин", show_alert=True)
+    # Обновляем экран настроек
+    user = await db.get_user(user_id)
+    alerts = user.get("alerts_enabled", True) if user else True
+    plan = user.get("plan", "free") if user else "free"
+    alert_status = "🔔 Включены" if alerts else "🔕 Выключены"
+    await call.message.edit_text(
+        f"<b>⚙️ Настройки</b>\n\n"
+        f"Тариф: <b>{plan.upper()}</b>\n"
+        f"Обновление: <b>каждые {interval} мин</b>\n"
+        f"Алерты: <b>{alert_status}</b>\n\n"
+        f"Выбери интервал обновления:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_settings(alerts)
+    )
+    await call.answer(f"✅ Интервал: {interval} мин")
+
+
+@dp.callback_query(F.data.startswith("toggle_alerts_"))
+async def cb_toggle_alerts(call: CallbackQuery):
+    user_id = call.from_user.id
+    enable = call.data == "toggle_alerts_on"
+    await db.update_user(user_id, {"alerts_enabled": enable})
+    user = await db.get_user(user_id)
+    plan = user.get("plan", "free") if user else "free"
+    interval = user.get("interval", 15) if user else 15
+    alert_status = "🔔 Включены" if enable else "🔕 Выключены"
+    await call.message.edit_text(
+        f"<b>⚙️ Настройки</b>\n\n"
+        f"Тариф: <b>{plan.upper()}</b>\n"
+        f"Обновление: <b>каждые {interval} мин</b>\n"
+        f"Алерты: <b>{alert_status}</b>\n\n"
+        f"Выбери интервал обновления:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_settings(enable)
+    )
+    status_text = "🔔 Алерты включены" if enable else "🔕 Алерты выключены"
+    await call.answer(status_text)
 
 
 @dp.callback_query(F.data == "subscription")
@@ -727,11 +772,72 @@ async def cb_back_main(call: CallbackQuery):
 # ЗАПУСК
 # ══════════════════════════════════════════════════════════════════════════════
 
+async def send_alerts():
+    """
+    Рассылка алертов пользователям по их расписанию.
+    Вызывается после каждого цикла сбора данных.
+    """
+    try:
+        users = await db.get_users_for_alerts()
+        if not users:
+            return
+
+        log.info(f"📨 Алерты: {len(users)} пользователей в очереди")
+        coins = COINS
+        data = await db.get_market_data(coins)
+        text = text_radar(coins, data)
+
+        sent = 0
+        for user in users:
+            tid = user.get("telegram_id")
+            if not tid:
+                continue
+            try:
+                await bot.send_message(
+                    chat_id=tid,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=kb_radar()
+                )
+                await db.update_last_alert(tid)
+                sent += 1
+                # Пауза между отправками (анти-флуд Telegram: 30 msg/sec)
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                log.warning(f"  ⚠️ Алерт {tid}: {e}")
+
+        if sent:
+            log.info(f"📨 Алерты отправлены: {sent}/{len(users)}")
+
+    except Exception as e:
+        log.error(f"send_alerts error: {e}")
+
+
+async def alert_loop():
+    """
+    Цикл рассылки алертов — проверяет каждую минуту,
+    кому из пользователей пора слать сводку.
+    """
+    log.info("📨 Алерт-цикл запущен (проверка каждую минуту)")
+    # Ждём первый сбор данных
+    await asyncio.sleep(120)
+
+    while True:
+        try:
+            await send_alerts()
+        except Exception as e:
+            log.error(f"Alert loop error: {e}")
+        await asyncio.sleep(60)  # Проверяем каждую минуту
+
+
 async def main():
     log.info("⚡ Zender Terminal Bot — starting...")
 
-    # Запускаем коллектор данных как фоновую задачу
-    asyncio.create_task(collector_loop(interval_minutes=15))
+    # Коллектор данных — каждые 5 мин (самый быстрый тариф Basic)
+    asyncio.create_task(collector_loop(interval_minutes=5))
+
+    # Алерт-цикл — проверяет и рассылает каждую минуту
+    asyncio.create_task(alert_loop())
 
     await dp.start_polling(bot)
 
