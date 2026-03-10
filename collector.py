@@ -49,6 +49,28 @@ except (ImportError, AttributeError):
 
 ETHERSCAN_BASE = "https://api.etherscan.io/api"
 
+# Whale Alert API v1 (Custom Alerts $29.95/мес — 100 alerts/hour, 10 req/min)
+try:
+    from config import WHALE_ALERT_KEY
+    HAS_WHALE_ALERT = bool(WHALE_ALERT_KEY)
+except (ImportError, AttributeError):
+    WHALE_ALERT_KEY = None
+    HAS_WHALE_ALERT = False
+
+WHALE_ALERT_BASE = "https://api.whale-alert.io/v1"
+
+# Маппинг наших символов → Whale Alert currency (lowercase)
+WHALE_ALERT_CURRENCIES = {
+    "BTC": "btc", "ETH": "eth", "BNB": "bnb", "SOL": "sol", "XRP": "xrp",
+    "ADA": "ada", "DOGE": "doge", "AVAX": "avax", "DOT": "dot", "LINK": "link",
+    "MATIC": "matic", "TRX": "trx", "SHIB": "shib", "UNI": "uni", "LTC": "ltc",
+    "ATOM": "atom", "NEAR": "near", "APT": "apt", "ARB": "arb", "OP": "op",
+}
+
+# Кэш whale данных — обновляем раз в 5 мин (коллектор цикл)
+WHALE_CACHE = {}  # {symbol: {"data": {...}, "ts": time.time()}}
+WHALE_CACHE_TTL = 5 * 60  # 5 минут
+
 # Blockchair — УБРАН (данные без контекста: кто, куда, зачем — бесполезно)
 # Вместо этого используем BGeometrics Exchange Netflow (уже подключён)
 
@@ -2199,6 +2221,25 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
             if obi_resistance_price and obi_resistance_vol:
                 onchain_lines.append(f"  Сопротивление: ${obi_resistance_price:,.0f} (${obi_resistance_vol/1e6:.1f}M)")
 
+        # WHALE ALERT: крупные транзакции китов (если есть данные)
+        whale_txs = coin_data.get("whale_txs", 0)
+        whale_to_ex = coin_data.get("whale_to_exchange", 0)
+        whale_from_ex = coin_data.get("whale_from_exchange", 0)
+        whale_total = coin_data.get("whale_total_usd", 0)
+        whale_dir = coin_data.get("whale_direction", "")
+
+        if whale_txs and whale_total and whale_total > 0:
+            onchain_lines.append(f"\nКИТЫ (Whale Alert, транзакции > $500K за 1ч):")
+            onchain_lines.append(f"- {whale_txs} крупных транзакций, объём ${whale_total/1e6:.1f}M")
+            if whale_to_ex > 0:
+                onchain_lines.append(f"- На биржи: ${whale_to_ex/1e6:.1f}M (готовятся продавать — медвежий)")
+            if whale_from_ex > 0:
+                onchain_lines.append(f"- С бирж: ${whale_from_ex/1e6:.1f}M (накопление — бычий)")
+            if whale_dir == "bullish":
+                onchain_lines.append(f"  → Киты ВЫВОДЯТ с бирж — накопление, бычий сигнал")
+            elif whale_dir == "bearish":
+                onchain_lines.append(f"  → Киты ЗАВОДЯТ на биржи — готовятся продавать, медвежий сигнал")
+
         # КОМБО-СИГНАЛ: FR отрицательный + CVD растёт + OBI BUY = short squeeze
         if fr is not None and cvd_value is not None and obi_side is not None:
             try:
@@ -2561,6 +2602,17 @@ def calculate_direction(coin_data: dict) -> dict:
         elif bitget_pos_l < 45 and cg_long_pct < 45:
             bear += 1
             factors_bear.append("позиции на двух биржах в шортах")
+
+    # 9. Whale Alert (крупные транзакции китов)
+    whale_dir = coin_data.get("whale_direction")
+    whale_total = coin_data.get("whale_total_usd", 0)
+    if whale_dir and whale_total and whale_total > 1_000_000:  # > $1M суммарно
+        if whale_dir == "bullish":
+            bull += 1
+            factors_bull.append("киты выводят с бирж (Whale Alert)")
+        elif whale_dir == "bearish":
+            bear += 1
+            factors_bear.append("киты заводят на биржи (Whale Alert)")
 
     # Определяем направление
     if bull > bear and bull >= 2:
@@ -2975,6 +3027,129 @@ def calculate_liquidation_levels(coin_data: dict) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# WHALE ALERT — крупные транзакции китов
+# API v1: https://api.whale-alert.io/v1/transactions
+# Custom Alerts план: 100 alerts/hour, 10 req/min, min_value $500K+
+# Один запрос возвращает ВСЕ монеты — парсим и раскидываем по символам
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def fetch_whale_transactions() -> dict:
+    """
+    Получает крупные транзакции за последний час со ВСЕХ блокчейнов.
+    Один запрос → парсим по монетам.
+    Возвращает: {symbol: {"whale_txs": N, "whale_to_exchange": $, "whale_from_exchange": $, "whale_total_usd": $, "whale_summary": "..."}}
+    """
+    if not HAS_WHALE_ALERT:
+        return {}
+
+    # Проверяем глобальный кэш (один запрос на все монеты)
+    cache_key = "_whale_all"
+    if cache_key in WHALE_CACHE and (time.time() - WHALE_CACHE[cache_key]["ts"]) < WHALE_CACHE_TTL:
+        return WHALE_CACHE[cache_key]["data"]
+
+    try:
+        # Запрашиваем транзакции за последний час, min $500K
+        start_ts = int(time.time()) - 3600  # 1 час назад
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                f"{WHALE_ALERT_BASE}/transactions",
+                params={
+                    "api_key": WHALE_ALERT_KEY,
+                    "min_value": 500000,  # $500K минимум
+                    "start": start_ts,
+                }
+            )
+            if resp.status_code != 200:
+                log.warning(f"  ⚠️ Whale Alert: HTTP {resp.status_code}")
+                return {}
+
+            data = resp.json()
+            if data.get("result") != "success":
+                log.warning(f"  ⚠️ Whale Alert: {data.get('message', 'unknown error')}")
+                return {}
+
+            transactions = data.get("transactions", [])
+            if not transactions:
+                log.info("  🐋 Whale Alert: нет крупных транзакций за час")
+                WHALE_CACHE[cache_key] = {"data": {}, "ts": time.time()}
+                return {}
+
+            # Группируем по нашим монетам
+            # Структура: {symbol: {to_exchange_usd, from_exchange_usd, tx_count, big_txs[]}}
+            whale_by_coin = {}
+
+            for tx in transactions:
+                symbol_lower = (tx.get("symbol") or "").lower()
+                # Найти наш символ
+                our_symbol = None
+                for coin, wa_cur in WHALE_ALERT_CURRENCIES.items():
+                    if wa_cur == symbol_lower:
+                        our_symbol = coin
+                        break
+
+                if not our_symbol:
+                    continue  # Не наша монета
+
+                if our_symbol not in whale_by_coin:
+                    whale_by_coin[our_symbol] = {
+                        "to_exchange_usd": 0.0,
+                        "from_exchange_usd": 0.0,
+                        "tx_count": 0,
+                        "total_usd": 0.0,
+                    }
+
+                amount_usd = float(tx.get("amount_usd", 0) or 0)
+                from_type = (tx.get("from", {}).get("owner_type") or "").lower()
+                to_type = (tx.get("to", {}).get("owner_type") or "").lower()
+
+                whale_by_coin[our_symbol]["tx_count"] += 1
+                whale_by_coin[our_symbol]["total_usd"] += amount_usd
+
+                # Классифицируем направление
+                if from_type != "exchange" and to_type == "exchange":
+                    # Кто-то заводит на биржу → готовится продавать (медвежий)
+                    whale_by_coin[our_symbol]["to_exchange_usd"] += amount_usd
+                elif from_type == "exchange" and to_type != "exchange":
+                    # Кто-то выводит с биржи → накопление (бычий)
+                    whale_by_coin[our_symbol]["from_exchange_usd"] += amount_usd
+
+            # Формируем результат
+            result = {}
+            for symbol, wd in whale_by_coin.items():
+                to_ex = wd["to_exchange_usd"]
+                from_ex = wd["from_exchange_usd"]
+                total = wd["total_usd"]
+                txs = wd["tx_count"]
+
+                # Определяем направление
+                if from_ex > to_ex * 1.5:
+                    direction = "bullish"  # Выводят с бирж — накопление
+                elif to_ex > from_ex * 1.5:
+                    direction = "bearish"  # Заводят на биржи — продажа
+                else:
+                    direction = "neutral"
+
+                result[symbol] = {
+                    "whale_txs": txs,
+                    "whale_to_exchange": to_ex,
+                    "whale_from_exchange": from_ex,
+                    "whale_total_usd": total,
+                    "whale_direction": direction,
+                }
+
+            log.info(f"  🐋 Whale Alert: {len(transactions)} транзакций, {len(result)} наших монет")
+            for sym, wd in result.items():
+                log.info(f"    {sym}: {wd['whale_txs']} txs, total ${wd['whale_total_usd']/1e6:.1f}M, to_ex ${wd['whale_to_exchange']/1e6:.1f}M, from_ex ${wd['whale_from_exchange']/1e6:.1f}M → {wd['whale_direction']}")
+
+            WHALE_CACHE[cache_key] = {"data": result, "ts": time.time()}
+            return result
+
+    except Exception as e:
+        log.error(f"  ❌ Whale Alert error: {e}")
+        return {}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ГЛАВНАЯ ФУНКЦИЯ СБОРА
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -2996,6 +3171,9 @@ async def collect_all():
 
     # Etherscan: ETH gas + supply (бесплатно, ключ нужен)
     etherscan_data = await fetch_etherscan_data()
+
+    # Whale Alert: крупные транзакции китов за последний час (1 запрос на все монеты)
+    whale_data_all = await fetch_whale_transactions()
 
     # Общие данные (СНАЧАЛА цены — приоритет!)
     fg_data = await fetch_fear_greed()
@@ -3093,7 +3271,8 @@ async def collect_all():
                 fetch_kraken_orderbook(symbol),
             )
 
-            # Киты: данные из BGeometrics Exchange Netflow (уже в gn_data)
+            # Whale Alert данные для этой монеты
+            whale_data = whale_data_all.get(symbol, {})
 
             # Объединяем все данные
             coin_data = {
@@ -3115,6 +3294,7 @@ async def collect_all():
                 **etherscan_data,     # Etherscan: ETH gas
                 **options_data,       # Deribit + Binance + OKX: IV, PCR, MaxPain
                 **flow_data,         # CVD + Order Book Imbalance (Binance Futures)
+                **whale_data,        # Whale Alert: крупные транзакции китов
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -3211,6 +3391,11 @@ async def collect_all():
                 "obi_ask_vol": str(coin_data.get("obi_ask_vol", "—")),
                 "obi_support_price": str(coin_data.get("obi_support_price", "—")),
                 "obi_resistance_price": str(coin_data.get("obi_resistance_price", "—")),
+                "whale_txs": str(coin_data.get("whale_txs", "0")),
+                "whale_to_exchange": fmt_usd(coin_data.get("whale_to_exchange")) if coin_data.get("whale_to_exchange") else "—",
+                "whale_from_exchange": fmt_usd(coin_data.get("whale_from_exchange")) if coin_data.get("whale_from_exchange") else "—",
+                "whale_total_usd": fmt_usd(coin_data.get("whale_total_usd")) if coin_data.get("whale_total_usd") else "—",
+                "whale_direction": str(coin_data.get("whale_direction", "—")),
                 "signal": signal_bar,
                 "label": signal_label,
                 "signal_label": signal_label,

@@ -158,6 +158,13 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
         "whales_buying": "киты покупают (выводят с бирж)",
         "whales_selling": "киты продают (заводят на биржи)",
         "whales_waiting": "киты выжидают",
+        "whale_alert_title": "🐋 Whale Alert (1ч)",
+        "whale_txs": "{n} крупных переводов",
+        "whale_to_exchange": "⬆️ На биржи: {usd}",
+        "whale_from_exchange": "⬇️ С бирж: {usd}",
+        "whale_bullish": "накопление — бычий",
+        "whale_bearish": "готовятся продавать — медвежий",
+        "whale_neutral": "нейтрально",
         "crowd_overlong": "толпа перегружена лонгами ({pct}%)",
         "crowd_long": "толпа в лонгах ({pct}%)",
         "crowd_overshort": "толпа перегружена шортами ({pct}%)",
@@ -327,6 +334,13 @@ Santiment · Deribit · Nansen · and 20+ more
         "whales_buying": "whales buying (withdrawing from exchanges)",
         "whales_selling": "whales selling (depositing to exchanges)",
         "whales_waiting": "whales waiting",
+        "whale_alert_title": "🐋 Whale Alert (1h)",
+        "whale_txs": "{n} large transfers",
+        "whale_to_exchange": "⬆️ To exchanges: {usd}",
+        "whale_from_exchange": "⬇️ From exchanges: {usd}",
+        "whale_bullish": "accumulation — bullish",
+        "whale_bearish": "preparing to sell — bearish",
+        "whale_neutral": "neutral",
         "crowd_overlong": "crowd overleveraged long ({pct}%)",
         "crowd_long": "crowd in longs ({pct}%)",
         "crowd_overshort": "crowd overleveraged short ({pct}%)",
@@ -825,7 +839,32 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         except (ValueError, TypeError):
             pass
 
-    # ── КИТЫ vs ТОЛПА ──
+    # ── WHALE ALERT (крупные транзакции) ──
+    whale_txs = d.get("whale_txs", "0")
+    whale_to_ex = d.get("whale_to_exchange", "—")
+    whale_from_ex = d.get("whale_from_exchange", "—")
+    whale_dir = d.get("whale_direction", "—")
+
+    has_whale_alert = False
+    try:
+        has_whale_alert = int(str(whale_txs)) > 0
+    except (ValueError, TypeError):
+        pass
+
+    if has_whale_alert:
+        lines.append("")
+        lines.append(t("whale_alert_title", lang))
+        lines.append(t("whale_txs", lang, n=whale_txs))
+        if _has(whale_to_ex):
+            lines.append(t("whale_to_exchange", lang, usd=whale_to_ex))
+        if _has(whale_from_ex):
+            lines.append(t("whale_from_exchange", lang, usd=whale_from_ex))
+        if whale_dir == "bullish":
+            lines.append(f"→ {t('whale_bullish', lang)}")
+        elif whale_dir == "bearish":
+            lines.append(f"→ {t('whale_bearish', lang)}")
+
+    # ── КИТЫ vs ТОЛПА (netflow + crowd) ──
     netflow = d.get("exchange_netflow_btc", "—")
     has_whale = (coin == "BTC" and _has(netflow))
     has_crowd = _has(bg_long_acc)
