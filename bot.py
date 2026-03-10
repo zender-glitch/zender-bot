@@ -165,6 +165,9 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
         "whale_bullish": "накопление — бычий",
         "whale_bearish": "готовятся продавать — медвежий",
         "whale_neutral": "нейтрально",
+        "probability_title": "ВЕРОЯТНОСТЬ ДВИЖЕНИЯ",
+        "prob_up": "Рост",
+        "prob_down": "Падение",
         "crowd_overlong": "толпа перегружена лонгами ({pct}%)",
         "crowd_long": "толпа в лонгах ({pct}%)",
         "crowd_overshort": "толпа перегружена шортами ({pct}%)",
@@ -449,6 +452,9 @@ Santiment · Deribit · Nansen · and 20+ more
         "whale_bullish": "accumulation — bullish",
         "whale_bearish": "preparing to sell — bearish",
         "whale_neutral": "neutral",
+        "probability_title": "PROBABILITY",
+        "prob_up": "Up",
+        "prob_down": "Down",
         "crowd_overlong": "crowd overleveraged long ({pct}%)",
         "crowd_long": "crowd in longs ({pct}%)",
         "crowd_overshort": "crowd overleveraged short ({pct}%)",
@@ -851,11 +857,15 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
         price  = d.get("price",  "—")
         change = d.get("change", "—")
         rec    = d.get("recommendation", "")
-        ch_icon = _change_icon(change)
         r_icon  = _rec_icon(rec)
         r_label = _rec_label(rec, lang)
 
-        lines.append(f"<code>{coin:<5}</code> {str(price):>10}   {ch_icon} <code>{change:<8}</code> {r_icon} {r_label}")
+        # Форматируем цену и change для моноширинного выравнивания
+        price_str = str(price)
+        change_str = str(change)
+
+        # Вся строка в <code> для моноширинного шрифта + иконка рекомендации снаружи
+        lines.append(f"{r_icon} <code>{coin:<5} {price_str:>10} {change_str:>8}  {r_label}</code>")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
@@ -897,9 +907,9 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         return str(v).replace("**", "").replace("*", "").strip() if v else ""
 
     what_happening = _clean(d.get("what_happening", ""))
-    if what_happening and len(what_happening) > 80:
-        what_happening = what_happening[:77] + "..."
-    trap           = _clean(d.get("trap", ""))
+    if what_happening and len(what_happening) > 120:
+        what_happening = what_happening[:117] + "..."
+    trap           = _clean(d.get("trap_display", d.get("trap", "")))
     recommendation = _clean(d.get("recommendation", ""))
     strength       = _clean(d.get("strength", ""))
     entry          = _clean(d.get("entry", ""))
@@ -948,6 +958,25 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     horizon = _clean(d.get("horizon", ""))
     if horizon:
         lines.append(f"⏱ {html_lib.escape(horizon)}")
+
+    # ── ВЕРОЯТНОСТЬ ДВИЖЕНИЯ ──
+    prob_bull = d.get("prob_bull")
+    prob_bear = d.get("prob_bear")
+    if prob_bull is not None and prob_bear is not None:
+        try:
+            pb = int(float(str(prob_bull)))
+            pr = int(float(str(prob_bear)))
+            if pb != 50 or pr != 50:
+                lines.append("")
+                lines.append(f"🎯 <b>{t('probability_title', lang)}</b>")
+                lines.append(f"⬆️ {t('prob_up', lang)}: {pb}%  /  ⬇️ {t('prob_down', lang)}: {pr}%")
+        except (ValueError, TypeError):
+            pass
+
+    # ── КОНФЛИКТ FUNDING ──
+    funding_conflict = _clean(d.get("funding_conflict", ""))
+    if funding_conflict:
+        lines.append(f"ℹ️ {html_lib.escape(funding_conflict)}")
 
     lines.append("")
     lines.append(t("section_market", lang))
@@ -1056,7 +1085,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         except (ValueError, TypeError):
             pass
 
-    # ── WHALE ALERT (крупные транзакции) ──
+    # ── КИТЫ vs ТОЛПА (Whale Alert + Netflow + Crowd) ──
+    # Whale Alert данные (реальные транзакции за 1ч) — приоритет над netflow
     whale_txs = d.get("whale_txs", "0")
     whale_to_ex = d.get("whale_to_exchange", "—")
     whale_from_ex = d.get("whale_from_exchange", "—")
@@ -1068,29 +1098,28 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     except (ValueError, TypeError):
         pass
 
-    if has_whale_alert:
-        lines.append("")
-        lines.append(t("whale_alert_title", lang))
-        lines.append(t("whale_txs", lang, n=whale_txs))
-        if _has(whale_to_ex):
-            lines.append(t("whale_to_exchange", lang, usd=whale_to_ex))
-        if _has(whale_from_ex):
-            lines.append(t("whale_from_exchange", lang, usd=whale_from_ex))
-        if whale_dir == "bullish":
-            lines.append(f"→ {t('whale_bullish', lang)}")
-        elif whale_dir == "bearish":
-            lines.append(f"→ {t('whale_bearish', lang)}")
-
-    # ── КИТЫ vs ТОЛПА (netflow + crowd) ──
+    # BGeometrics netflow (суточный) — fallback если нет Whale Alert
     netflow = d.get("exchange_netflow_btc", "—")
-    has_whale = (coin == "BTC" and _has(netflow))
+    has_netflow = (coin == "BTC" and _has(netflow) and not has_whale_alert)
     has_crowd = _has(bg_long_acc)
 
-    if has_whale or has_crowd:
+    if has_whale_alert or has_netflow or has_crowd:
         lines.append("")
         lines.append(t("whales_vs_crowd", lang))
 
-        if has_whale:
+        # Whale Alert — свежие данные за 1ч (приоритет)
+        if has_whale_alert:
+            lines.append(t("whale_txs", lang, n=whale_txs))
+            if _has(whale_to_ex):
+                lines.append(t("whale_to_exchange", lang, usd=whale_to_ex))
+            if _has(whale_from_ex):
+                lines.append(t("whale_from_exchange", lang, usd=whale_from_ex))
+            if whale_dir == "bullish":
+                lines.append(f"→ {t('whale_bullish', lang)}")
+            elif whale_dir == "bearish":
+                lines.append(f"→ {t('whale_bearish', lang)}")
+        elif has_netflow:
+            # Fallback: BGeometrics netflow (суточный)
             try:
                 nf = float(str(netflow).replace(",", "").replace("+", ""))
                 if nf < -100:
@@ -1134,16 +1163,107 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         except (ValueError, TypeError):
             pass
 
-    # ── ЛИКВИДНОСТЬ ──
+    # ── ORDER FLOW (CVD + стакан) ──
+    cvd_val = d.get("cvd_value", "—")
+    cvd_trend = d.get("cvd_trend", "—")
+    cvd_side = d.get("cvd_side", "—")
+    obi_bid = d.get("obi_bid_vol", "—")
+    obi_ask = d.get("obi_ask_vol", "—")
+    obi_side = d.get("obi_side", "—")
+
+    has_cvd = _has(cvd_val) and cvd_val != "—"
+    has_obi = _has(obi_bid) and obi_bid != "—" and _has(obi_ask) and obi_ask != "—"
+
+    if has_cvd or has_obi:
+        lines.append("")
+        _of_title = "━━━ ПОТОК ОРДЕРОВ ━━━" if lang == "ru" else "━━━ ORDER FLOW ━━━"
+        lines.append(_of_title)
+
+        if has_cvd:
+            try:
+                cv = float(cvd_val)
+                _trend_icon = "📈" if cvd_trend == "rising" else "📉"
+                _cvd_hint_ru = "покупатели давят" if cv > 0 else "продавцы давят"
+                _cvd_hint_en = "buyers dominate" if cv > 0 else "sellers dominate"
+                _cvd_hint = _cvd_hint_ru if lang == "ru" else _cvd_hint_en
+                lines.append(f"{_trend_icon} CVD (1ч): {cv:+.1f}M")
+                lines.append(f"→ {_cvd_hint}")
+            except (ValueError, TypeError):
+                pass
+
+        if has_obi:
+            try:
+                bid_v = float(obi_bid)
+                ask_v = float(obi_ask)
+                if bid_v > 0 or ask_v > 0:
+                    _buy_label = "Покупки" if lang == "ru" else "Buys"
+                    _sell_label = "Продажи" if lang == "ru" else "Sells"
+                    lines.append(f"🟢 {_buy_label}: ${bid_v/1e6:.1f}M")
+                    lines.append(f"🔴 {_sell_label}: ${ask_v/1e6:.1f}M")
+            except (ValueError, TypeError):
+                pass
+
+        # Support/Resistance walls
+        obi_sup_price = d.get("obi_support_price", "")
+        obi_res_price = d.get("obi_resistance_price", "")
+        obi_sup_vol = d.get("obi_support_vol", "")
+        obi_res_vol = d.get("obi_resistance_vol", "")
+        if _has(obi_sup_price) and _has(obi_res_price):
+            try:
+                sp = float(obi_sup_price)
+                rp = float(obi_res_price)
+                sv = float(obi_sup_vol) if _has(obi_sup_vol) else 0
+                rv = float(obi_res_vol) if _has(obi_res_vol) else 0
+                _wall_label_ru = "Стена покупок" if lang == "ru" else "Buy wall"
+                _rwall_label_ru = "Стена продаж" if lang == "ru" else "Sell wall"
+                if sv > 0:
+                    lines.append(f"🟩 {_wall_label_ru}: ${sp:,.0f} (${sv/1e6:.1f}M)")
+                if rv > 0:
+                    lines.append(f"🟥 {_rwall_label_ru}: ${rp:,.0f} (${rv/1e6:.1f}M)")
+            except (ValueError, TypeError):
+                pass
+
+    # ── LIQUIDITY MAP ──
     liq_lvl_shorts = d.get("liq_level_shorts", "")
     liq_lvl_longs = d.get("liq_level_longs", "")
     if liq_lvl_shorts or liq_lvl_longs:
         lines.append("")
-        lines.append(t("section_liquidity", lang))
+        _liq_title = "━━━ КАРТА ЛИКВИДАЦИЙ ━━━" if lang == "ru" else "━━━ LIQUIDITY MAP ━━━"
+        lines.append(_liq_title)
         if liq_lvl_shorts:
-            lines.append(f"{html_lib.escape(liq_lvl_shorts)} — {t('shorts_stops', lang)}")
+            _sl = "стопы шортов" if lang == "ru" else "short stops"
+            lines.append(f"🔥 {html_lib.escape(liq_lvl_shorts)} — {_sl}")
         if liq_lvl_longs:
-            lines.append(f"{html_lib.escape(liq_lvl_longs)} — {t('longs_stops', lang)}")
+            _ll = "стопы лонгов" if lang == "ru" else "long stops"
+            lines.append(f"🔥 {html_lib.escape(liq_lvl_longs)} — {_ll}")
+        _between_ru = "→ цена между кластерами ликвидаций"
+        _between_en = "→ price between liquidation clusters"
+        lines.append(_between_ru if lang == "ru" else _between_en)
+
+    # ── MARKET STRUCTURE (Spot vs Perp) ──
+    spot_vol = d.get("spot_volume", "")
+    perp_vol = d.get("perp_volume", "")
+    if _has(spot_vol) and _has(perp_vol):
+        try:
+            sv = float(str(spot_vol).replace(",", ""))
+            pv = float(str(perp_vol).replace(",", ""))
+            total_v = sv + pv
+            if total_v > 0:
+                spot_pct = round(sv / total_v * 100)
+                lines.append("")
+                _ms_title = "━━━ СТРУКТУРА РЫНКА ━━━" if lang == "ru" else "━━━ MARKET STRUCTURE ━━━"
+                lines.append(_ms_title)
+                lines.append(f"Spot: ${sv/1e9:.1f}B  |  Perp: ${pv/1e9:.1f}B")
+                if spot_pct >= 50:
+                    _hint = "рост поддержан реальными покупками" if lang == "ru" else "growth supported by real buys"
+                    lines.append(f"→ Spot Dominance: {spot_pct}%")
+                    lines.append(f"→ {_hint}")
+                else:
+                    _hint = "рынок двигают деривативы — движение нестабильно" if lang == "ru" else "derivatives driving market — potentially unstable"
+                    lines.append(f"→ Perp Dominance: {100-spot_pct}%")
+                    lines.append(f"→ {_hint}")
+        except (ValueError, TypeError):
+            pass
 
     # ── УРОВНИ ──
     lines.append("")
@@ -1241,21 +1361,22 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def text_options_detail(coin: str, data: dict, lang: str = "ru", ai_text: str = "") -> str:
-    """Полный экран опционов для BTC/ETH."""
+    """Полный экран опционов для BTC/ETH — терминальный стиль."""
     d = data.get(coin, {})
     price = d.get("price", "—")
 
     lines = [
-        f"<b>{t('options_title', lang, coin=coin)}</b>",
+        f"⚡️ <b>ZENDER TERMINAL · {coin} OPTIONS</b>",
         "",
     ]
 
-    # PCR
+    # ── PCR ──
     pcr_val = d.get("options_pcr", "—")
+    pcr_f = None
     if _has(pcr_val) and pcr_val != "—":
         try:
             pcr_f = float(pcr_val)
-            lines.append(f"{t('options_pcr_label', lang)}: {pcr_f:.2f}")
+            lines.append(f"📊 <b>Put/Call Ratio:</b> {pcr_f:.2f}")
             if pcr_f < 0.7:
                 lines.append(f"→ {t('options_pcr_bullish', lang)}")
             elif pcr_f > 1.0:
@@ -1265,25 +1386,31 @@ def text_options_detail(coin: str, data: dict, lang: str = "ru", ai_text: str = 
         except (ValueError, TypeError):
             pass
 
-    # Max Pain
+    # ── Max Pain ──
     mp_val = d.get("options_max_pain", "—")
+    mp_f = None
+    diff_pct = 0
     if _has(mp_val) and mp_val != "—":
         try:
             mp_f = float(str(mp_val).replace("$", "").replace(",", ""))
             price_f = float(str(price).replace("$", "").replace(",", ""))
             diff_pct = ((mp_f - price_f) / price_f) * 100
             lines.append("")
-            lines.append(f"{t('options_maxpain_label', lang)}: ${mp_f:,.0f} (цена {price})" if lang == "ru" else f"{t('options_maxpain_label', lang)}: ${mp_f:,.0f} (price {price})")
+            lines.append(f"🎯 <b>Max Pain:</b> ${mp_f:,.0f}")
+            _price_label = "текущая цена" if lang == "ru" else "current price"
+            lines.append(f"{_price_label}: {price}")
+            lines.append("")
             if abs(diff_pct) < 0.5:
                 lines.append(f"→ {t('options_maxpain_at', lang)}")
             elif diff_pct > 0:
-                lines.append(f"→ {t('options_maxpain_above', lang, pct=f'+{diff_pct:.1f}%')}")
+                lines.append(f"→ цена ниже Max Pain на {abs(diff_pct):.1f}%" if lang == "ru" else f"→ price below Max Pain by {abs(diff_pct):.1f}%")
+                lines.append(f"→ рынок часто тянется к Max Pain перед экспирацией" if lang == "ru" else f"→ market often gravitates to Max Pain before expiry")
             else:
-                lines.append(f"→ {t('options_maxpain_below', lang, pct=f'{diff_pct:.1f}%')}")
+                lines.append(f"→ цена выше Max Pain на {abs(diff_pct):.1f}%" if lang == "ru" else f"→ price above Max Pain by {abs(diff_pct):.1f}%")
         except (ValueError, TypeError):
             pass
 
-    # IV
+    # ── IV ──
     iv_val = d.get("options_iv", "—")
     if _has(iv_val) and iv_val != "—":
         try:
@@ -1297,30 +1424,41 @@ def text_options_detail(coin: str, data: dict, lang: str = "ru", ai_text: str = 
                 iv_hint = t("options_iv_high", lang)
             else:
                 iv_hint = t("options_iv_extreme", lang)
-            lines.append(f"{t('options_iv_label', lang)}: {iv_f:.0f}% — {iv_hint}")
+            lines.append(f"📈 <b>Implied Volatility:</b> {iv_f:.0f}%")
+            lines.append(f"→ {iv_hint}")
         except (ValueError, TypeError):
             pass
 
-    # OI
+    # ── OPEN INTEREST ──
     oi_calls = d.get("options_oi_calls", "—")
     oi_puts = d.get("options_oi_puts", "—")
+    oi_c = None
+    oi_p = None
     if _has(oi_calls) and _has(oi_puts) and oi_calls != "—" and oi_puts != "—":
         try:
-            c = float(oi_calls)
-            p = float(oi_puts)
+            oi_c = float(oi_calls)
+            oi_p = float(oi_puts)
             lines.append("")
-            lines.append(f"<b>{t('options_oi_title', lang)}</b>")
-            lines.append(f"🟢 Calls: {c/1000:,.0f}K     🔴 Puts: {p/1000:,.0f}K")
-            if c > p * 1.3:
+            lines.append(f"<b>📊 OPEN INTEREST</b>")
+            lines.append("")
+            lines.append(f"🟢 Calls: {oi_c/1000:,.0f}K")
+            lines.append(f"🔴 Puts: {oi_p/1000:,.0f}K")
+            lines.append("")
+            total_oi = oi_c + oi_p
+            if total_oi > 0:
+                call_pct = round(oi_c / total_oi * 100)
+                put_pct = 100 - call_pct
+                lines.append(f"<code>Calls: {call_pct}%  |  Puts: {put_pct}%</code>")
+            if oi_c > oi_p * 1.3:
                 lines.append(f"→ {t('options_oi_bulls', lang)}")
-            elif p > c * 1.3:
+            elif oi_p > oi_c * 1.3:
                 lines.append(f"→ {t('options_oi_bears', lang)}")
             else:
                 lines.append(f"→ {t('options_oi_balanced', lang)}")
         except (ValueError, TypeError):
             pass
 
-    # Экспирации
+    # ── ЭКСПИРАЦИИ ──
     exp_raw = d.get("options_expiries", "—")
     if exp_raw and exp_raw != "—":
         exps = None
@@ -1334,34 +1472,65 @@ def text_options_detail(coin: str, data: dict, lang: str = "ru", ai_text: str = 
                 pass
         if exps and isinstance(exps, list):
             lines.append("")
-            lines.append(f"<b>{t('options_exp_title', lang)}</b>")
+            _exp_title = "⏳ ЭКСПИРАЦИИ" if lang == "ru" else "⏳ EXPIRATIONS"
+            lines.append(f"<b>{_exp_title}</b>")
+            lines.append("")
             for e in exps:
                 date_str = e.get("date", "")
                 oi_val = e.get("oi", 0)
                 days = e.get("days", 99)
                 is_max = e.get("is_max", False)
 
-                line = f"{date_str} — {oi_val:,} OI · {t('options_exp_days', lang, days=days)}"
-                if days <= 3:
-                    line += " ⚠️"
-                if is_max:
-                    line += " 🔥"
+                icon = "🔥" if is_max else ("⚠️" if days <= 3 else "📅")
+                line = f"{icon} {date_str}"
+                line += f"\nOI: {oi_val:,} · {t('options_exp_days', lang, days=days)}"
                 lines.append(line)
 
-                # Подсказка
                 if days <= 3:
                     lines.append(f"→ {t('options_exp_warning', lang)}")
                 elif is_max:
                     lines.append(f"→ {t('options_exp_max', lang)}")
                 lines.append("")
 
-    # AI-анализ
-    if ai_text:
-        lines.append(f"<b>{t('options_ai_title', lang)}</b>")
-        lines.append(html_lib.escape(ai_text))
+    # ── OPTION BIAS ──
+    if pcr_f is not None:
+        lines.append(f"<b>🎯 OPTION BIAS</b>")
+        lines.append("")
+        if pcr_f < 0.5:
+            bull_pct = 75
+        elif pcr_f < 0.7:
+            bull_pct = 65
+        elif pcr_f < 0.85:
+            bull_pct = 58
+        elif pcr_f <= 1.0:
+            bull_pct = 50
+        elif pcr_f < 1.3:
+            bull_pct = 40
+        else:
+            bull_pct = 30
+        # Boost if Max Pain above price
+        if mp_f and diff_pct > 2:
+            bull_pct = min(85, bull_pct + 5)
+        elif mp_f and diff_pct < -2:
+            bull_pct = max(15, bull_pct - 5)
+        bear_pct = 100 - bull_pct
+        lines.append(f"📈 Bullish: {bull_pct}%")
+        lines.append(f"📉 Bearish: {bear_pct}%")
+        if mp_f:
+            lines.append("")
+            _target_label = "🎯 TARGET MAGNET" if lang == "en" else "🎯 МАГНИТ ЦЕНЫ"
+            lines.append(f"{_target_label}: ${mp_f:,.0f} (Max Pain)")
+        lines.append("")
 
-    lines.append("")
+    # ── AI-АНАЛИЗ ──
+    if ai_text:
+        _ai_title = "🤖 AI-АНАЛИЗ ОПЦИОНОВ" if lang == "ru" else "🤖 AI OPTIONS ANALYSIS"
+        lines.append(f"<b>{_ai_title}</b>")
+        lines.append(html_lib.escape(ai_text))
+        lines.append("")
+
     lines.append("⚡ <b>Zender Terminal</b>")
+    lines.append("@ZenderTerminalBot")
 
     return "\n".join(lines)
 

@@ -1286,6 +1286,79 @@ async def fetch_flow_data(symbol: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SPOT vs PERP VOLUME — Binance API (бесплатно)
+# Показывает кто двигает рынок: реальные покупки (spot) или деривативы (perp)
+# ══════════════════════════════════════════════════════════════════════════════
+
+SPOT_PERP_CACHE = {}
+SPOT_PERP_CACHE_TTL = 10 * 60  # 10 мин — объёмы меняются медленно
+
+# Маппинг символов на Binance Spot тикеры
+BINANCE_SPOT_MAP = {
+    "BTC": "BTCUSDT", "ETH": "ETHUSDT", "BNB": "BNBUSDT", "SOL": "SOLUSDT",
+    "XRP": "XRPUSDT", "ADA": "ADAUSDT", "DOGE": "DOGEUSDT", "AVAX": "AVAXUSDT",
+    "DOT": "DOTUSDT", "LINK": "LINKUSDT", "MATIC": "MATICUSDT", "TRX": "TRXUSDT",
+    "SHIB": "SHIBUSDT", "UNI": "UNIUSDT", "LTC": "LTCUSDT", "ATOM": "ATOMUSDT",
+    "NEAR": "NEARUSDT", "APT": "APTUSDT", "ARB": "ARBUSDT", "OP": "OPUSDT",
+}
+
+
+async def fetch_spot_perp_volume(symbol: str) -> dict:
+    """
+    Спот vs Перп объёмы за 24ч из Binance.
+    Spot: GET /api/v3/ticker/24hr
+    Futures: GET /fapi/v1/ticker/24hr
+    """
+    spot_ticker = BINANCE_SPOT_MAP.get(symbol)
+    futures_ticker = BINANCE_FUTURES_MAP.get(symbol)
+    if not spot_ticker or not futures_ticker:
+        return {}
+
+    cache_key = f"spv_{symbol}"
+    if cache_key in SPOT_PERP_CACHE and (time.time() - SPOT_PERP_CACHE[cache_key]["ts"]) < SPOT_PERP_CACHE_TTL:
+        return SPOT_PERP_CACHE[cache_key]["data"]
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            spot_resp, perp_resp = await asyncio.gather(
+                client.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={spot_ticker}"),
+                client.get(f"https://fapi.binance.com/fapi/v1/ticker/24hr?symbol={futures_ticker}"),
+                return_exceptions=True,
+            )
+
+        spot_vol = 0.0
+        perp_vol = 0.0
+
+        if not isinstance(spot_resp, Exception) and spot_resp.status_code == 200:
+            sd = spot_resp.json()
+            spot_vol = float(sd.get("quoteVolume", 0))
+
+        if not isinstance(perp_resp, Exception) and perp_resp.status_code == 200:
+            pd_data = perp_resp.json()
+            perp_vol = float(pd_data.get("quoteVolume", 0))
+
+        if spot_vol == 0 and perp_vol == 0:
+            return {}
+
+        total = spot_vol + perp_vol
+        spot_pct = round(spot_vol / total * 100) if total > 0 else 50
+
+        result = {
+            "spot_volume": round(spot_vol),
+            "perp_volume": round(perp_vol),
+            "spot_dominance": spot_pct,
+        }
+
+        SPOT_PERP_CACHE[cache_key] = {"data": result, "ts": time.time()}
+        log.info(f"  📊 Spot/Perp {symbol}: spot ${spot_vol/1e9:.2f}B / perp ${perp_vol/1e9:.2f}B ({spot_pct}% spot)")
+        return result
+
+    except Exception as e:
+        log.warning(f"  ⚠️ Spot/Perp {symbol} error: {e}")
+        return {}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # COINGLASS INDICATORS (уже платим $95/мес STARTUP — используем больше endpoints!)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -2262,7 +2335,11 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
     pre_recommendation = p.get("recommendation", "выжидать")
     pre_strength = p.get("strength", "слабо")
     pre_trap = p.get("trap", "нет")
+    pre_trap_display = p.get("trap_display", pre_trap)
     pre_horizon = p.get("horizon", "1-2 дня")
+    pre_prob_bull = p.get("prob_bull", 50)
+    pre_prob_bear = p.get("prob_bear", 50)
+    pre_funding_conflict = p.get("funding_conflict", "")
     scoring_factors = p.get("factors", [])
     scoring_conflicts = p.get("conflicts", [])
     dir_factors_bull = p.get("dir_factors_bull", [])
@@ -2297,11 +2374,11 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
 - ГОРИЗОНТ: {pre_horizon}{factors_text}
 
 ТВОЯ ЗАДАЧА — написать ТОЛЬКО:
-1. ЧТО_ПРОИСХОДИТ — короткое объяснение простым языком (до 80 символов)
+1. ЧТО_ПРОИСХОДИТ — короткое объяснение простым языком (до 120 символов)
 2. ВХОД / СТОП / ЦЕЛЬ — конкретные цены
 
 ПРАВИЛА:
-- ЧТО_ПРОИСХОДИТ: МАКСИМУМ 80 СИМВОЛОВ. Одно предложение! Объясни простым языком.
+- ЧТО_ПРОИСХОДИТ: МАКСИМУМ 120 СИМВОЛОВ. Одно предложение! Объясни простым языком.
 - ОБЯЗАТЕЛЬНО упомяни {symbol} и хотя бы одну конкретную цифру (цену, %, объём). Текст должен быть УНИКАЛЬНЫМ для каждой монеты!
 - ЗАПРЕЩЁННЫЕ СЛОВА: RSI, MACD, SOPR, Bid/Ask, death cross, golden cross, short squeeze, funding rate, Fear & Greed, netflow, leverage. Используй: "тренд вниз", "страх на рынке", "покупатели давят", "шорты в ловушке" и т.д.
 - ВХОД: текущая цена или чуть ниже для покупки / чуть выше для продажи
@@ -2311,7 +2388,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
 - НЕ ПИШИ БОЛЬШЕ 4 СТРОК
 
 ОТВЕТЬ СТРОГО В ФОРМАТЕ (4 строки, не больше):
-ЧТО_ПРОИСХОДИТ: одно предложение, до 80 символов
+ЧТО_ПРОИСХОДИТ: одно предложение, до 120 символов
 ВХОД: $XXX,XXX
 СТОП: $XXX,XXX
 ЦЕЛЬ: $XXX,XXX"""
@@ -2350,8 +2427,8 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
                 if upper.startswith("ЧТО_ПРОИСХОДИТ:") or upper.startswith("ЧТО ПРОИСХОДИТ:"):
                     if val:
                         clean_val = val.strip()
-                        if len(clean_val) > 80:
-                            clean_val = clean_val[:77] + "..."
+                        if len(clean_val) > 120:
+                            clean_val = clean_val[:117] + "..."
                         result["what_happening"] = clean_val
                 elif upper.startswith("ВХОД:"):
                     if val:
@@ -2369,8 +2446,8 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
                     clean = line.strip().lstrip("*").strip()
                     if len(clean) > 20 and not clean.upper().startswith(("ВХОД", "СТОП", "ЦЕЛЬ")):
                         result["what_happening"] = clean.split(":", 1)[1].strip() if ":" in clean else clean
-                        if len(result["what_happening"]) > 80:
-                            result["what_happening"] = result["what_happening"][:77] + "..."
+                        if len(result["what_happening"]) > 120:
+                            result["what_happening"] = result["what_happening"][:117] + "..."
                         break
 
             # Замена запрещённых англицизмов (LLM может игнорировать бан)
@@ -2390,7 +2467,11 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
             result["recommendation"] = pre_recommendation
             result["strength"] = pre_strength
             result["trap"] = pre_trap if pre_trap != "нет" else ""
+            result["trap_display"] = pre_trap_display if pre_trap_display != "нет" else ""
             result["horizon"] = pre_horizon
+            result["prob_bull"] = pre_prob_bull
+            result["prob_bear"] = pre_prob_bear
+            result["funding_conflict"] = pre_funding_conflict
 
             # Backward compat
             if result.get("what_happening"):
@@ -2406,7 +2487,11 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
             "recommendation": pre_recommendation,
             "strength": pre_strength,
             "trap": pre_trap if pre_trap != "нет" else "",
+            "trap_display": pre_trap_display if pre_trap_display != "нет" else "",
             "horizon": pre_horizon,
+            "prob_bull": pre_prob_bull,
+            "prob_bear": pre_prob_bear,
+            "funding_conflict": pre_funding_conflict,
             "what_happening": "",
             "llm_text": "",
         }
@@ -2734,6 +2819,8 @@ def calculate_market_state(coin_data: dict, direction: dict) -> dict:
         "state": state,
         "state_label": state_label,
         "trap": trap,
+        "is_short_squeeze": is_short_squeeze,
+        "is_long_squeeze": is_long_squeeze,
     }
 
 
@@ -2891,6 +2978,51 @@ def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict
     else:
         horizon = "1-2 дня"
 
+    # ── FIX: Согласование ловушки с рекомендацией ──
+    # Если шорты в ловушке но сигнал "продавать" — объясняем конфликт
+    # Если лонги в ловушке но сигнал "покупать" — объясняем конфликт
+    trap_display = trap
+    if trap == "шорты в ловушке" and recommendation == "продавать":
+        trap_display = "шорты в ловушке — возможен short squeeze, но тренд вниз"
+    elif trap == "лонги в ловушке" and recommendation == "покупать":
+        trap_display = "лонги в ловушке — возможен long squeeze, но тренд вверх"
+    elif trap == "шорты в ловушке":
+        trap_display = "шорты в ловушке — возможен рост (short squeeze)"
+    elif trap == "лонги в ловушке":
+        trap_display = "лонги в ловушке — возможно падение (long squeeze)"
+
+    # ── ВЕРОЯТНОСТЬ ДВИЖЕНИЯ (на основе bull/bear факторов) ──
+    if total > 0:
+        prob_bull = round((dir_bull / total) * 100)
+        prob_bear = 100 - prob_bull
+    else:
+        prob_bull = 50
+        prob_bear = 50
+
+    # Корректируем по качеству сетапа
+    if quality == "STRONG":
+        boost = 10
+    elif quality == "MEDIUM":
+        boost = 5
+    else:
+        boost = 0
+
+    if dir_code == "UP":
+        prob_bull = min(95, prob_bull + boost)
+        prob_bear = 100 - prob_bull
+    elif dir_code == "DOWN":
+        prob_bear = min(95, prob_bear + boost)
+        prob_bull = 100 - prob_bear
+
+    # ── КОНФЛИКТ FUNDING vs СИГНАЛ ──
+    fr = coin_data.get("funding_rate")
+    funding_conflict = ""
+    if fr is not None:
+        if fr < -0.005 and recommendation == "продавать":
+            funding_conflict = "FR отрицательный (бычий), но тренд и объёмы давят вниз"
+        elif fr > 0.03 and recommendation == "покупать":
+            funding_conflict = "FR высокий (медвежий), но покупатели сильнее"
+
     return {
         "quality": quality,
         "quality_label": quality_label,
@@ -2904,6 +3036,10 @@ def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict
         "signal_bar": signal_bar,
         "signal_label": signal_label,
         "horizon": horizon,
+        "trap_display": trap_display,
+        "prob_bull": prob_bull,
+        "prob_bear": prob_bear,
+        "funding_conflict": funding_conflict,
     }
 
 
@@ -2933,6 +3069,7 @@ def run_signal_pipeline(coin_data: dict) -> dict:
         "state": market_state["state"],
         "state_label": market_state["state_label"],
         "trap": market_state["trap"],
+        "trap_display": setup.get("trap_display", market_state["trap"]),
         # Слой 3
         "quality": setup["quality"],
         "quality_label": setup["quality_label"],
@@ -2947,6 +3084,9 @@ def run_signal_pipeline(coin_data: dict) -> dict:
         "recommendation": setup["recommendation"],
         "strength": setup["strength"],
         "horizon": setup["horizon"],
+        "prob_bull": setup.get("prob_bull", 50),
+        "prob_bear": setup.get("prob_bear", 50),
+        "funding_conflict": setup.get("funding_conflict", ""),
     }
 
 
@@ -3259,6 +3399,9 @@ async def collect_all():
             # CVD + Order Book Imbalance (Binance Futures, бесплатно)
             flow_data = await fetch_flow_data(symbol)
 
+            # Spot vs Perp Volume (Binance, бесплатно)
+            spot_perp_data = await fetch_spot_perp_volume(symbol)
+
             # Технические индикаторы (RSI, MACD, SMA — для не-BTC монет, из CoinGecko истории)
             tech_data = await fetch_tech_indicators(symbol)
 
@@ -3294,6 +3437,7 @@ async def collect_all():
                 **etherscan_data,     # Etherscan: ETH gas
                 **options_data,       # Deribit + Binance + OKX: IV, PCR, MaxPain
                 **flow_data,         # CVD + Order Book Imbalance (Binance Futures)
+                **spot_perp_data,    # Spot vs Perp Volume (Binance)
                 **whale_data,        # Whale Alert: крупные транзакции китов
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
@@ -3319,7 +3463,11 @@ async def collect_all():
                     "recommendation": pipeline["recommendation"],
                     "strength": pipeline["strength"],
                     "trap": pipeline["trap"] if pipeline["trap"] != "нет" else "",
+                    "trap_display": pipeline.get("trap_display", "") if pipeline.get("trap_display", "нет") != "нет" else "",
                     "horizon": pipeline["horizon"],
+                    "prob_bull": pipeline.get("prob_bull", 50),
+                    "prob_bear": pipeline.get("prob_bear", 50),
+                    "funding_conflict": pipeline.get("funding_conflict", ""),
                     "what_happening": "",
                 }
 
@@ -3390,7 +3538,12 @@ async def collect_all():
                 "obi_bid_vol": str(coin_data.get("obi_bid_vol", "—")),
                 "obi_ask_vol": str(coin_data.get("obi_ask_vol", "—")),
                 "obi_support_price": str(coin_data.get("obi_support_price", "—")),
+                "obi_support_vol": str(coin_data.get("obi_support_vol", "—")),
                 "obi_resistance_price": str(coin_data.get("obi_resistance_price", "—")),
+                "obi_resistance_vol": str(coin_data.get("obi_resistance_vol", "—")),
+                "spot_volume": str(coin_data.get("spot_volume", "")),
+                "perp_volume": str(coin_data.get("perp_volume", "")),
+                "spot_dominance": str(coin_data.get("spot_dominance", "")),
                 "whale_txs": str(coin_data.get("whale_txs", "0")),
                 "whale_to_exchange": fmt_usd(coin_data.get("whale_to_exchange")) if coin_data.get("whale_to_exchange") else "—",
                 "whale_from_exchange": fmt_usd(coin_data.get("whale_from_exchange")) if coin_data.get("whale_from_exchange") else "—",
@@ -3407,6 +3560,10 @@ async def collect_all():
                 "what_happening": llm_data.get("what_happening", ""),
                 "horizon": llm_data.get("horizon", ""),
                 "trap": llm_data.get("trap", ""),
+                "trap_display": llm_data.get("trap_display", ""),
+                "prob_bull": str(llm_data.get("prob_bull", 50)),
+                "prob_bear": str(llm_data.get("prob_bear", 50)),
+                "funding_conflict": llm_data.get("funding_conflict", ""),
                 "recommendation": llm_data.get("recommendation", ""),
                 "strength": llm_data.get("strength", ""),
                 "entry": llm_data.get("entry", ""),
