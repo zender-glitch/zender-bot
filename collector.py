@@ -725,11 +725,11 @@ CRYPTOQUANT_CACHE_TTL = 12 * 3600  # 12 часов — daily resolution, нет 
 
 # Эндпоинты CryptoQuant (Free plan: btc, eth)
 CRYPTOQUANT_ENDPOINTS = {
-    "btc_exchange_reserve": "/v1/btc/exchange-flows/reserve?window=day&limit=1",
-    "btc_exchange_netflow": "/v1/btc/exchange-flows/netflow?window=day&limit=1",
-    "btc_miner_outflow": "/v1/btc/miner-flows/outflow?window=day&limit=1",
-    "eth_exchange_reserve": "/v1/eth/exchange-flows/reserve?window=day&limit=1",
-    "eth_exchange_netflow": "/v1/eth/exchange-flows/netflow?window=day&limit=1",
+    "btc_exchange_reserve": "/btc/exchange-flows/reserve?window=day&limit=1",
+    "btc_exchange_netflow": "/btc/exchange-flows/netflow?window=day&limit=1",
+    "btc_miner_outflow": "/btc/miner-flows/outflow?window=day&limit=1",
+    "eth_exchange_reserve": "/eth/exchange-flows/reserve?window=day&limit=1",
+    "eth_exchange_netflow": "/eth/exchange-flows/netflow?window=day&limit=1",
 }
 
 
