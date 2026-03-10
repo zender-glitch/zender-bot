@@ -17,15 +17,18 @@ class Database:
 
     # ── Пользователи ─────────────────────────────────────────────────────────
 
-    async def upsert_user(self, telegram_id, username, first_name):
+    async def upsert_user(self, telegram_id, username, first_name, language=None):
         """Создать или обновить пользователя"""
         try:
+            data = {
+                "telegram_id": telegram_id,
+                "username": username,
+                "first_name": first_name,
+            }
+            if language is not None:
+                data["language"] = language
             self.client.table("users").upsert(
-                {
-                    "telegram_id": telegram_id,
-                    "username": username,
-                    "first_name": first_name,
-                },
+                data,
                 on_conflict="telegram_id",
             ).execute()
         except Exception as e:
@@ -71,7 +74,7 @@ class Database:
         try:
             res = (
                 self.client.table("users")
-                .select("telegram_id, interval, last_alert_at, alerts_enabled")
+                .select("telegram_id, interval, last_alert_at, alerts_enabled, language")
                 .eq("alerts_enabled", True)
                 .execute()
             )
@@ -83,13 +86,10 @@ class Database:
                 last_alert = user.get("last_alert_at")
 
                 if last_alert is None:
-                    # Никогда не получал алерт — слать
                     users_to_alert.append(user)
                 else:
-                    # Парсим timestamp
                     try:
                         if isinstance(last_alert, str):
-                            # Supabase возвращает ISO формат
                             last_dt = datetime.fromisoformat(last_alert.replace("Z", "+00:00"))
                         else:
                             last_dt = last_alert
@@ -147,19 +147,12 @@ class Database:
             log.warning(f"get_market_data: {e}")
 
         # Заглушки для монет без данных
-        stubs = {
-            "BTC":  {"price": "$83,420",  "change": "+0.8%",  "signal": "▓▓░░░", "label": "слабый"},
-            "ETH":  {"price": "$3,240",   "change": "+0.1%",  "signal": "▓▓▓▓░", "label": "сильный"},
-            "SOL":  {"price": "$142.80",  "change": "-1.4%",  "signal": "▓▓▓░░", "label": "средний"},
-            "BNB":  {"price": "$412.00",  "change": "+1.2%",  "signal": "▓▓▓░░", "label": "средний"},
-            "AVAX": {"price": "$38.20",   "change": "-2.1%",  "signal": "▓▓░░░", "label": "слабый"},
-        }
         for coin in coins:
             if coin not in result:
-                result[coin] = stubs.get(coin, {
+                result[coin] = {
                     "price": "—", "change": "—",
-                    "signal": "░░░░░", "label": "нет данных",
-                })
+                    "signal": "⬜⬜⬜⬜⬜", "label": "no data",
+                }
 
         return result
 

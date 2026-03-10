@@ -63,16 +63,36 @@ CG_HEADERS = {
     "Accept": "application/json",
 }
 
-# Монеты для сбора данных
-COINS = ["BTC", "ETH", "SOL", "BNB", "AVAX"]
+# Монеты для сбора данных — ТОП-20 по капитализации
+COINS = [
+    "BTC", "ETH", "BNB", "SOL", "XRP",
+    "ADA", "DOGE", "AVAX", "DOT", "LINK",
+    "MATIC", "TRX", "SHIB", "UNI", "LTC",
+    "ATOM", "NEAR", "APT", "ARB", "OP",
+]
 
 # CoinGecko IDs
 COINGECKO_IDS = {
     "BTC": "bitcoin",
     "ETH": "ethereum",
-    "SOL": "solana",
     "BNB": "binancecoin",
+    "SOL": "solana",
+    "XRP": "ripple",
+    "ADA": "cardano",
+    "DOGE": "dogecoin",
     "AVAX": "avalanche-2",
+    "DOT": "polkadot",
+    "LINK": "chainlink",
+    "MATIC": "matic-network",
+    "TRX": "tron",
+    "SHIB": "shiba-inu",
+    "UNI": "uniswap",
+    "LTC": "litecoin",
+    "ATOM": "cosmos",
+    "NEAR": "near",
+    "APT": "aptos",
+    "ARB": "arbitrum",
+    "OP": "optimism",
 }
 
 
@@ -987,9 +1007,24 @@ BINANCE_FUTURES_BASE = "https://fapi.binance.com"
 BINANCE_FUTURES_MAP = {
     "BTC": "BTCUSDT",
     "ETH": "ETHUSDT",
-    "SOL": "SOLUSDT",
     "BNB": "BNBUSDT",
+    "SOL": "SOLUSDT",
+    "XRP": "XRPUSDT",
+    "ADA": "ADAUSDT",
+    "DOGE": "DOGEUSDT",
     "AVAX": "AVAXUSDT",
+    "DOT": "DOTUSDT",
+    "LINK": "LINKUSDT",
+    "MATIC": "MATICUSDT",
+    "TRX": "TRXUSDT",
+    "SHIB": "SHIBUSDT",
+    "UNI": "UNIUSDT",
+    "LTC": "LTCUSDT",
+    "ATOM": "ATOMUSDT",
+    "NEAR": "NEARUSDT",
+    "APT": "APTUSDT",
+    "ARB": "ARBUSDT",
+    "OP": "OPUSDT",
 }
 
 
@@ -1388,7 +1423,7 @@ CROSS_EXCHANGE_TTL = 15 * 60  # 15 минут
 
 
 # Пары которые поддерживают L/S на Bitget (BNB, AVAX — не поддерживаются)
-BITGET_LS_SUPPORTED = {"BTC", "ETH", "SOL"}
+BITGET_LS_SUPPORTED = {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "DOT", "LINK", "AVAX", "MATIC", "UNI", "LTC", "ATOM", "NEAR", "APT", "ARB", "OP"}
 
 
 async def fetch_bitget_ls(symbol: str) -> dict:
@@ -1493,7 +1528,14 @@ KRAKEN_FUTURES_SYMBOLS = {
     "BTC": "PF_XBTUSD",
     "ETH": "PF_ETHUSD",
     "SOL": "PF_SOLUSD",
-    # BNB и AVAX не торгуются на Kraken Futures
+    "XRP": "PF_XRPUSD",
+    "ADA": "PF_ADAUSD",
+    "DOGE": "PF_DOGEUSD",
+    "DOT": "PF_DOTUSD",
+    "LINK": "PF_LINKUSD",
+    "LTC": "PF_LTCUSD",
+    "ATOM": "PF_ATOMUSD",
+    # BNB, AVAX, MATIC, TRX, SHIB, UNI, NEAR, APT, ARB, OP — нет на Kraken Futures
 }
 
 KRAKEN_CACHE = {}
@@ -1626,7 +1668,22 @@ DYDX_SYMBOLS = {
     "BTC": "BTC-USD",
     "ETH": "ETH-USD",
     "SOL": "SOL-USD",
+    "XRP": "XRP-USD",
+    "ADA": "ADA-USD",
+    "DOGE": "DOGE-USD",
     "AVAX": "AVAX-USD",
+    "DOT": "DOT-USD",
+    "LINK": "LINK-USD",
+    "MATIC": "MATIC-USD",
+    "TRX": "TRX-USD",
+    "SHIB": "SHIB-USD",
+    "UNI": "UNI-USD",
+    "LTC": "LTC-USD",
+    "ATOM": "ATOM-USD",
+    "NEAR": "NEAR-USD",
+    "APT": "APT-USD",
+    "ARB": "ARB-USD",
+    "OP": "OP-USD",
     # BNB не торгуется на dYdX
 }
 

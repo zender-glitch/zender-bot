@@ -14,10 +14,12 @@ COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY",  "")
 ANTHROPIC_KEY     = os.getenv("ANTHROPIC_KEY",      "")
 ETHERSCAN_KEY     = os.getenv("ETHERSCAN_KEY",      "")
 CRYPTOQUANT_KEY   = os.getenv("CRYPTOQUANT_KEY",    "")
+WHALE_ALERT_KEY   = os.getenv("WHALE_ALERT_KEY",    "")
 # Binance + Bybit: бесплатные public API, ключ НЕ нужен
 # On-chain: бесплатные API (blockchain.info + BGeometrics + DeFiLlama), ключ НЕ нужен
 # Etherscan: бесплатный план (100k calls/day) — ETH on-chain данные
 # CryptoQuant: бесплатный план (50 req/day, daily resolution, 7 days history)
+# Whale Alert: Custom Alerts API ($29.95/mo) — whale транзакции, 100 alerts/hour
 
 # Проверка при старте
 if not BOT_TOKEN:

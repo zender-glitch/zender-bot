@@ -1,6 +1,6 @@
 """
 ZENDER TERMINAL — Telegram Bot
-Этап 1-2-5: бот с командами, inline-кнопками + коллектор + LLM-анализ.
+Этап 1-2-5-6: бот + коллектор + LLM + i18n + top-20 + навигация.
 """
 
 import asyncio
@@ -29,83 +29,21 @@ log = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher()
 
-# ── Монеты доступные в боте ───────────────────────────────────────────────────
-COINS = ["BTC", "ETH", "SOL", "BNB", "AVAX"]
+# ── Монеты: ТОП-20 по капитализации ──────────────────────────────────────────
+COINS = [
+    "BTC", "ETH", "BNB", "SOL", "XRP",
+    "ADA", "DOGE", "AVAX", "DOT", "LINK",
+    "MATIC", "TRX", "SHIB", "UNI", "LTC",
+    "ATOM", "NEAR", "APT", "ARB", "OP",
+]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# КЛАВИАТУРЫ
+# ЛОКАЛИЗАЦИЯ (i18n) — RU / EN
 # ══════════════════════════════════════════════════════════════════════════════
 
-def kb_main():
-    """Главная клавиатура"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📡 Радар рынка",     callback_data="radar"),
-            InlineKeyboardButton(text="⚙️ Настройки",       callback_data="settings"),
-        ],
-        [
-            InlineKeyboardButton(text="💳 Подписка",        callback_data="subscription"),
-            InlineKeyboardButton(text="❓ Помощь",          callback_data="help"),
-        ],
-    ])
-
-def kb_coin_buttons():
-    """Кнопки монет + обновить + радар"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=c, callback_data=f"coin_{c}") for c in COINS],
-        [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh")],
-        [InlineKeyboardButton(text="📡 Радар рынка", callback_data="radar")],
-    ])
-
-def kb_coin_detail(coin: str):
-    """Кнопки под анализом монеты"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=c, callback_data=f"coin_{c}") for c in COINS],
-        [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"coin_{coin}")],
-        [InlineKeyboardButton(text="📡 Радар рынка", callback_data="radar")],
-    ])
-
-def kb_radar():
-    """Кнопки под радаром"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=c, callback_data=f"coin_{c}") for c in COINS],
-        [InlineKeyboardButton(text="🔄 Обновить", callback_data="radar")],
-    ])
-
-def kb_back_to_summary():
-    """Кнопка назад к сводке"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀ Назад к радару", callback_data="radar")]
-    ])
-
-def kb_settings(alerts_on: bool = True):
-    """Настройки: интервал + алерты вкл/выкл"""
-    alert_text = "🔔 Алерты: ВКЛ" if alerts_on else "🔕 Алерты: ВЫКЛ"
-    alert_cb = "toggle_alerts_off" if alerts_on else "toggle_alerts_on"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="5 мин",  callback_data="interval_5"),
-            InlineKeyboardButton(text="15 мин", callback_data="interval_15"),
-            InlineKeyboardButton(text="1 час",  callback_data="interval_60"),
-        ],
-        [InlineKeyboardButton(text=alert_text, callback_data=alert_cb)],
-        [InlineKeyboardButton(text="◀ Назад", callback_data="back_main")],
-    ])
-
-def kb_subscription():
-    """Тарифы"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 Basic — $14/мес",  callback_data="plan_basic")],
-        [InlineKeyboardButton(text="🟡 Pro — $29/мес",    callback_data="plan_pro")],
-        [InlineKeyboardButton(text="🔴 Pro+ — $49/мес",   callback_data="plan_pro_plus")],
-        [InlineKeyboardButton(text="◀ Назад",             callback_data="back_main")],
-    ])
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ТЕКСТЫ СООБЩЕНИЙ
-# ══════════════════════════════════════════════════════════════════════════════
-
-WELCOME = """<b>⚡ ZENDER TERMINAL</b>
+TEXTS = {
+    "ru": {
+        "welcome": """<b>⚡ ZENDER TERMINAL</b>
 
 Агрегатор крипто-данных с 30+ сервисов + LLM-анализ.
 Трейдер платит $14/мес вместо $200–800+ по отдельности.
@@ -116,9 +54,9 @@ WELCOME = """<b>⚡ ZENDER TERMINAL</b>
 🟡 <b>Pro $29</b> — все метрики · дашборд · 3 темы · без LLM
 🔴 <b>Pro+ $49</b> — алерты 1-2 мин · сканер 200 монет
 
-Используй кнопки ниже 👇"""
+Используй кнопки ниже 👇""",
 
-HELP_TEXT = """<b>⚡ ZENDER TERMINAL — Помощь</b>
+        "help": """<b>⚡ ZENDER TERMINAL — Помощь</b>
 
 <b>Команды:</b>
 /start — главное меню
@@ -135,11 +73,423 @@ HELP_TEXT = """<b>⚡ ZENDER TERMINAL — Помощь</b>
 Coinglass · Glassnode · Hyblock · CryptoQuant
 Santiment · Deribit · Nansen · и ещё 20+ сервисов
 
-⚡ t.me/ZenderTerminal_bot"""
+⚡ t.me/ZenderTerminal_bot""",
 
+        # Кнопки
+        "btn_radar": "📡 Радар рынка",
+        "btn_settings": "⚙️ Настройки",
+        "btn_subscription": "💳 Подписка",
+        "btn_help": "❓ Помощь",
+        "btn_refresh": "🔄 Обновить",
+        "btn_back": "◀ Назад",
+        "btn_back_radar": "◀ Назад к радару",
+        "btn_language": "🌐 Язык: Русский",
+
+        # Настройки
+        "settings_title": "⚙️ Настройки",
+        "settings_plan": "Тариф",
+        "settings_interval": "Обновление",
+        "settings_every": "каждые {interval} мин",
+        "settings_alerts": "Алерты",
+        "settings_choose_interval": "Выбери интервал обновления:",
+        "alerts_on": "🔔 Алерты: ВКЛ",
+        "alerts_off": "🔕 Алерты: ВЫКЛ",
+        "alerts_enabled": "🔔 Включены",
+        "alerts_disabled": "🔕 Выключены",
+        "alerts_on_short": "🔔 Алерты включены",
+        "alerts_off_short": "🔕 Алерты выключены",
+        "interval_set": "✅ Интервал: {interval} мин",
+        "refreshed": "🔄 Обновлено!",
+
+        # Подписка
+        "sub_title": "💳 Выбери тариф",
+        "sub_free": '🆓 <b>Free</b> — 1 монета, LLM-анализ, 15 мин',
+        "sub_basic": '🟢 <b>Basic $14/мес</b> — топ-20, LLM-анализ, 5/15/60 мин',
+        "sub_pro": '🟡 <b>Pro $29/мес</b> — все метрики, дашборд, 3 темы',
+        "sub_pro_plus": '🔴 <b>Pro+ $49/мес</b> — алерты 1-2 мин, сканер 200 монет',
+        "payment_soon": "💳 Оплата {name} {price} — скоро будет доступно!",
+
+        # Статус
+        "status_title": "📋 Твой статус",
+        "status_plan": "Тариф",
+        "status_coins": "Монет отслеживается",
+        "status_interval": "Интервал обновления",
+        "not_registered": "Ты ещё не зарегистрирован. Напиши /start",
+
+        # Радар
+        "radar_title": "📡 РАДАР РЫНКА",
+        "market_mood": "Настроение рынка",
+        "press_coin": "Нажми монету для анализа ⬇",
+
+        # Анализ монеты
+        "what_happening": "ЧТО ПРОИСХОДИТ",
+        "trap": "ЛОВУШКА",
+        "signal": "СИГНАЛ",
+        "trend_up": "📈 Тренд: вверх",
+        "trend_down": "📉 Тренд: вниз",
+        "ls_bulls": "быки давят",
+        "ls_bears": "медведи давят",
+        "ls_balance": "баланс",
+        "ls_label": "Лонг/Шорт",
+        "funding_longs_pay": "лонги платят шортам",
+        "funding_shorts_pay": "шорты платят лонгам",
+        "funding_balance": "баланс",
+        "funding_label": "Фандинг",
+        "oi_rising": "растёт",
+        "oi_falling": "падает",
+        "oi_stable": "стабильно",
+        "oi_label": "Открытый интерес",
+        "rsi_overbought": "перекуплен",
+        "rsi_heated": "разогрет",
+        "rsi_oversold": "перепродан",
+        "rsi_cooling": "охлаждается",
+        "rsi_normal": "норма",
+        "state_label": "Состояние",
+        "mood_panic": "паника",
+        "mood_fear": "страх",
+        "mood_calm": "спокойствие",
+        "mood_greed": "жадность",
+        "mood_euphoria": "эйфория",
+        "mood_label": "Настроение рынка",
+        "whales_vs_crowd": "🐋 КИТЫ vs ТОЛПА",
+        "whales_buying": "киты покупают (выводят с бирж)",
+        "whales_selling": "киты продают (заводят на биржи)",
+        "whales_waiting": "киты выжидают",
+        "crowd_overlong": "толпа перегружена лонгами ({pct}%)",
+        "crowd_long": "толпа в лонгах ({pct}%)",
+        "crowd_overshort": "толпа перегружена шортами ({pct}%)",
+        "crowd_short": "толпа в шортах ({pct}%)",
+        "crowd_balance": "толпа в балансе",
+        "gas_high": "высокая нагрузка",
+        "gas_medium": "умеренная",
+        "gas_low": "низкая",
+        "section_market": "━━━ РЫНОК ━━━",
+        "section_liquidity": "━━━ ЛИКВИДНОСТЬ ━━━",
+        "section_levels": "━━━ УРОВНИ ━━━",
+        "liq_1h": "Ликвидации (1ч)",
+        "liq_shorts": "шорты",
+        "liq_longs": "лонги",
+        "shorts_stops": "стопы шортов",
+        "longs_stops": "стопы лонгов",
+        "entry_label": "🎯 Вход",
+        "stop_label": "🛑 Стоп",
+        "target_label": "✅ Цель",
+        "buy_label": "🎯 Покупка",
+        "sell_label": "✅ Продажа",
+
+        # Навигация
+        "page_label": "Стр. {page}/{total}",
+        "next_page": "▶",
+        "prev_page": "◀",
+    },
+
+    "en": {
+        "welcome": """<b>⚡ ZENDER TERMINAL</b>
+
+Crypto data aggregator from 30+ services + LLM analysis.
+Trader pays $14/mo instead of $200–800+ separately.
+
+<b>Plans:</b>
+🆓 <b>Free</b> — 1 coin · LLM analysis · 15 min refresh
+🟢 <b>Basic $14</b> — top-20 coins · LLM analysis · 5/15/60 min
+🟡 <b>Pro $29</b> — all metrics · dashboard · 3 themes · no LLM
+🔴 <b>Pro+ $49</b> — 1-2 min alerts · 200 coin scanner
+
+Use the buttons below 👇""",
+
+        "help": """<b>⚡ ZENDER TERMINAL — Help</b>
+
+<b>Commands:</b>
+/start — main menu
+/summary — market overview
+/settings — settings
+/status — subscription status
+
+<b>How it works:</b>
+• Summaries arrive automatically on schedule
+• Tap a coin — get full analysis
+• ◀ Back button — return to overview
+
+<b>Data updated from:</b>
+Coinglass · Glassnode · Hyblock · CryptoQuant
+Santiment · Deribit · Nansen · and 20+ more
+
+⚡ t.me/ZenderTerminal_bot""",
+
+        # Buttons
+        "btn_radar": "📡 Market Radar",
+        "btn_settings": "⚙️ Settings",
+        "btn_subscription": "💳 Subscription",
+        "btn_help": "❓ Help",
+        "btn_refresh": "🔄 Refresh",
+        "btn_back": "◀ Back",
+        "btn_back_radar": "◀ Back to radar",
+        "btn_language": "🌐 Lang: English",
+
+        # Settings
+        "settings_title": "⚙️ Settings",
+        "settings_plan": "Plan",
+        "settings_interval": "Refresh",
+        "settings_every": "every {interval} min",
+        "settings_alerts": "Alerts",
+        "settings_choose_interval": "Choose refresh interval:",
+        "alerts_on": "🔔 Alerts: ON",
+        "alerts_off": "🔕 Alerts: OFF",
+        "alerts_enabled": "🔔 Enabled",
+        "alerts_disabled": "🔕 Disabled",
+        "alerts_on_short": "🔔 Alerts enabled",
+        "alerts_off_short": "🔕 Alerts disabled",
+        "interval_set": "✅ Interval: {interval} min",
+        "refreshed": "🔄 Refreshed!",
+
+        # Subscription
+        "sub_title": "💳 Choose a plan",
+        "sub_free": '🆓 <b>Free</b> — 1 coin, LLM analysis, 15 min',
+        "sub_basic": '🟢 <b>Basic $14/mo</b> — top-20, LLM analysis, 5/15/60 min',
+        "sub_pro": '🟡 <b>Pro $29/mo</b> — all metrics, dashboard, 3 themes',
+        "sub_pro_plus": '🔴 <b>Pro+ $49/mo</b> — 1-2 min alerts, 200 coin scanner',
+        "payment_soon": "💳 Payment {name} {price} — coming soon!",
+
+        # Status
+        "status_title": "📋 Your status",
+        "status_plan": "Plan",
+        "status_coins": "Coins tracked",
+        "status_interval": "Refresh interval",
+        "not_registered": "You're not registered yet. Send /start",
+
+        # Radar
+        "radar_title": "📡 MARKET RADAR",
+        "market_mood": "Market mood",
+        "press_coin": "Tap a coin for analysis ⬇",
+
+        # Coin analysis
+        "what_happening": "WHAT'S HAPPENING",
+        "trap": "TRAP",
+        "signal": "SIGNAL",
+        "trend_up": "📈 Trend: up",
+        "trend_down": "📉 Trend: down",
+        "ls_bulls": "bulls pushing",
+        "ls_bears": "bears pushing",
+        "ls_balance": "balanced",
+        "ls_label": "Long/Short",
+        "funding_longs_pay": "longs pay shorts",
+        "funding_shorts_pay": "shorts pay longs",
+        "funding_balance": "balanced",
+        "funding_label": "Funding",
+        "oi_rising": "rising",
+        "oi_falling": "falling",
+        "oi_stable": "stable",
+        "oi_label": "Open Interest",
+        "rsi_overbought": "overbought",
+        "rsi_heated": "heated",
+        "rsi_oversold": "oversold",
+        "rsi_cooling": "cooling",
+        "rsi_normal": "normal",
+        "state_label": "State",
+        "mood_panic": "panic",
+        "mood_fear": "fear",
+        "mood_calm": "calm",
+        "mood_greed": "greed",
+        "mood_euphoria": "euphoria",
+        "mood_label": "Market mood",
+        "whales_vs_crowd": "🐋 WHALES vs CROWD",
+        "whales_buying": "whales buying (withdrawing from exchanges)",
+        "whales_selling": "whales selling (depositing to exchanges)",
+        "whales_waiting": "whales waiting",
+        "crowd_overlong": "crowd overleveraged long ({pct}%)",
+        "crowd_long": "crowd in longs ({pct}%)",
+        "crowd_overshort": "crowd overleveraged short ({pct}%)",
+        "crowd_short": "crowd in shorts ({pct}%)",
+        "crowd_balance": "crowd balanced",
+        "gas_high": "high load",
+        "gas_medium": "moderate",
+        "gas_low": "low",
+        "section_market": "━━━ MARKET ━━━",
+        "section_liquidity": "━━━ LIQUIDITY ━━━",
+        "section_levels": "━━━ LEVELS ━━━",
+        "liq_1h": "Liquidations (1h)",
+        "liq_shorts": "shorts",
+        "liq_longs": "longs",
+        "shorts_stops": "short stops",
+        "longs_stops": "long stops",
+        "entry_label": "🎯 Entry",
+        "stop_label": "🛑 Stop",
+        "target_label": "✅ Target",
+        "buy_label": "🎯 Buy",
+        "sell_label": "✅ Sell",
+
+        # Navigation
+        "page_label": "Pg. {page}/{total}",
+        "next_page": "▶",
+        "prev_page": "◀",
+    },
+}
+
+
+def t(key: str, lang: str = "ru", **kwargs) -> str:
+    """Получить текст по ключу и языку"""
+    text = TEXTS.get(lang, TEXTS["ru"]).get(key, TEXTS["ru"].get(key, key))
+    if kwargs:
+        text = text.format(**kwargs)
+    return text
+
+
+async def get_user_lang(user_id: int) -> str:
+    """Получить язык пользователя из БД"""
+    user = await db.get_user(user_id)
+    if user:
+        return user.get("language", "ru") or "ru"
+    return "ru"
+
+
+def detect_language(language_code: str | None) -> str:
+    """Определить язык по TG language_code"""
+    if not language_code:
+        return "ru"
+    lc = language_code.lower()
+    if lc.startswith("en"):
+        return "en"
+    return "ru"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# КЛАВИАТУРЫ (с пагинацией для 20 монет)
+# ══════════════════════════════════════════════════════════════════════════════
+
+COINS_PER_PAGE = 10  # 2 ряда по 5 монет на странице
+
+
+def _coin_page_buttons(page: int = 0, prefix: str = "coin_") -> list:
+    """Кнопки монет для текущей страницы (2 ряда по 5)"""
+    start = page * COINS_PER_PAGE
+    end = start + COINS_PER_PAGE
+    page_coins = COINS[start:end]
+
+    rows = []
+    for i in range(0, len(page_coins), 5):
+        chunk = page_coins[i:i+5]
+        rows.append([
+            InlineKeyboardButton(text=c, callback_data=f"{prefix}{c}")
+            for c in chunk
+        ])
+    return rows
+
+
+def _page_nav_buttons(page: int, total_pages: int, lang: str = "ru") -> list:
+    """Кнопки навигации между страницами"""
+    if total_pages <= 1:
+        return []
+    buttons = []
+    if page > 0:
+        buttons.append(InlineKeyboardButton(text="◀", callback_data=f"page_{page - 1}"))
+    buttons.append(InlineKeyboardButton(
+        text=t("page_label", lang, page=page + 1, total=total_pages),
+        callback_data="noop"
+    ))
+    if page < total_pages - 1:
+        buttons.append(InlineKeyboardButton(text="▶", callback_data=f"page_{page + 1}"))
+    return buttons
+
+
+TOTAL_PAGES = (len(COINS) + COINS_PER_PAGE - 1) // COINS_PER_PAGE
+
+
+def kb_main(lang: str = "ru"):
+    """Главная клавиатура"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t("btn_radar", lang), callback_data="radar"),
+            InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
+        ],
+        [
+            InlineKeyboardButton(text=t("btn_subscription", lang), callback_data="subscription"),
+            InlineKeyboardButton(text=t("btn_help", lang), callback_data="help"),
+        ],
+    ])
+
+
+def kb_radar(page: int = 0, lang: str = "ru"):
+    """Кнопки под радаром: монеты + пагинация + обновить + настройки"""
+    rows = _coin_page_buttons(page)
+    nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
+    if nav:
+        rows.append(nav)
+    rows.append([
+        InlineKeyboardButton(text=t("btn_refresh", lang), callback_data="radar"),
+        InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_coin_detail(coin: str, page: int = 0, lang: str = "ru"):
+    """Кнопки под анализом монеты"""
+    rows = _coin_page_buttons(page)
+    nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
+    if nav:
+        rows.append(nav)
+    rows.append([
+        InlineKeyboardButton(text=t("btn_refresh", lang), callback_data=f"coin_{coin}"),
+        InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
+    ])
+    rows.append([
+        InlineKeyboardButton(text=t("btn_back_radar", lang), callback_data="radar"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_coin_buttons(page: int = 0, lang: str = "ru"):
+    """Кнопки монет + обновить + радар + настройки"""
+    rows = _coin_page_buttons(page)
+    nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text=t("btn_refresh", lang), callback_data="refresh")])
+    rows.append([
+        InlineKeyboardButton(text=t("btn_radar", lang), callback_data="radar"),
+        InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_back_to_summary(lang: str = "ru"):
+    """Кнопка назад к сводке"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_back_radar", lang), callback_data="radar")]
+    ])
+
+
+def kb_settings(alerts_on: bool = True, lang: str = "ru"):
+    """Настройки: интервал + алерты + язык"""
+    alert_text = t("alerts_on", lang) if alerts_on else t("alerts_off", lang)
+    alert_cb = "toggle_alerts_off" if alerts_on else "toggle_alerts_on"
+    lang_text = t("btn_language", lang)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="5 мин",  callback_data="interval_5"),
+            InlineKeyboardButton(text="15 мин", callback_data="interval_15"),
+            InlineKeyboardButton(text="1 час",  callback_data="interval_60"),
+        ],
+        [InlineKeyboardButton(text=alert_text, callback_data=alert_cb)],
+        [InlineKeyboardButton(text=lang_text, callback_data="toggle_lang")],
+        [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_main")],
+    ])
+
+
+def kb_subscription(lang: str = "ru"):
+    """Тарифы"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟢 Basic — $14/мес",  callback_data="plan_basic")],
+        [InlineKeyboardButton(text="🟡 Pro — $29/мес",    callback_data="plan_pro")],
+        [InlineKeyboardButton(text="🔴 Pro+ — $49/мес",   callback_data="plan_pro_plus")],
+        [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_main")],
+    ])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# УТИЛИТЫ ТЕКСТА
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _arrow(change_str: str) -> str:
-    """Треугольник: 🔺 рост, 🔻 падение, ▸ без изменений"""
     s = str(change_str).strip()
     if s.startswith("+") and s != "+0.00%":
         return "🔺"
@@ -149,7 +499,6 @@ def _arrow(change_str: str) -> str:
 
 
 def _has(val) -> bool:
-    """Проверка что значение не пустое / не заглушка"""
     if val is None:
         return False
     s = str(val).strip()
@@ -157,25 +506,31 @@ def _has(val) -> bool:
 
 
 def _rec_icon(rec: str) -> str:
-    """Иконка рекомендации"""
     r = str(rec).lower()
-    if "покупать" in r:
+    if "покупать" in r or "buy" in r:
         return "🟢"
-    elif "продавать" in r:
+    elif "продавать" in r or "sell" in r:
         return "🔴"
     return "🟡"
 
-def _rec_label(rec: str) -> str:
-    """Лейбл рекомендации для радара"""
+
+def _rec_label(rec: str, lang: str = "ru") -> str:
     r = str(rec).lower()
-    if "покупать" in r:
-        return "ПОКУПАТЬ"
-    elif "продавать" in r:
-        return "ПРОДАВАТЬ"
-    return "ДЕРЖАТЬ"
+    if lang == "en":
+        if "покупать" in r or "buy" in r:
+            return "BUY"
+        elif "продавать" in r or "sell" in r:
+            return "SELL"
+        return "HOLD"
+    else:
+        if "покупать" in r:
+            return "ПОКУПАТЬ"
+        elif "продавать" in r:
+            return "ПРОДАВАТЬ"
+        return "ДЕРЖАТЬ"
+
 
 def _change_icon(change_str: str) -> str:
-    """Цветной кружок для изменения цены"""
     s = str(change_str).strip()
     if s.startswith("+") and s != "+0.00%":
         return "🟢"
@@ -183,13 +538,15 @@ def _change_icon(change_str: str) -> str:
         return "🔴"
     return "⚪"
 
-def text_radar(coins: list[str], data: dict) -> str:
-    """
-    📡 РАДАР РЫНКА — компактный обзор всех монет.
-    """
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ТЕКСТЫ СООБЩЕНИЙ
+# ══════════════════════════════════════════════════════════════════════════════
+
+def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
+    """📡 РАДАР РЫНКА — компактный обзор всех монет."""
     lines = [
-        "<b>📡 РАДАР РЫНКА</b>",
-        "━━━━━━━━━━━━━━",
+        f"<b>{t('radar_title', lang)}</b>",
         "",
     ]
 
@@ -200,7 +557,7 @@ def text_radar(coins: list[str], data: dict) -> str:
         rec    = d.get("recommendation", "")
         ch_icon = _change_icon(change)
         r_icon  = _rec_icon(rec)
-        r_label = _rec_label(rec)
+        r_label = _rec_label(rec, lang)
 
         lines.append(f"<code>{coin:<5}</code> {str(price):>10}   {ch_icon} <code>{change:<8}</code> {r_icon} {r_label}")
 
@@ -224,32 +581,26 @@ def text_radar(coins: list[str], data: dict) -> str:
                 fg_emoji = "🤑"
         except (ValueError, TypeError):
             fg_emoji = ""
-        lines.append(f"{fg_emoji} <b>Настроение рынка</b>")
-        lines.append(f"{fg_label} ({fg} из 100)")
+        lines.append(f"{fg_emoji} <b>{t('market_mood', lang)}</b>")
+        lines.append(f"{fg_label} ({fg}/100)")
 
     lines.append("")
-    lines.append("Нажми монету для анализа ⬇")
-    lines.append("━━━━━━━━━━━━━━━━")
+    lines.append(t("press_coin", lang))
 
     return "\n".join(lines)
 
 
-def text_coin_analysis(coin: str, data: dict) -> str:
-    """
-    Компактный анализ монеты — новый терминальный формат.
-    ~20 строк вместо 40+. Понятный русский язык.
-    """
+def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
+    """Компактный анализ монеты."""
     d = data.get(coin, {})
     price  = d.get("price",  "—")
     change = d.get("change", "—")
     ch_icon = _change_icon(change)
 
-    # LLM данные (новый формат v8) — убираем markdown-звёздочки **
     def _clean(v):
         return str(v).replace("**", "").replace("*", "").strip() if v else ""
 
     what_happening = _clean(d.get("what_happening", ""))
-    # Принудительный лимит 80 символов (safety net — LLM может игнорировать лимит)
     if what_happening and len(what_happening) > 80:
         what_happening = what_happening[:77] + "..."
     trap           = _clean(d.get("trap", ""))
@@ -258,12 +609,11 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     entry          = _clean(d.get("entry", ""))
     stop           = _clean(d.get("stop", ""))
     target         = _clean(d.get("target", ""))
-    # Fallback на старый формат
     buy_zone       = _clean(d.get("buy_zone", ""))
     sell_zone      = _clean(d.get("sell_zone", ""))
 
     rec_icon = _rec_icon(recommendation)
-    rec_label = _rec_label(recommendation)
+    rec_label = _rec_label(recommendation, lang)
     strength_label = strength.upper() if strength else ""
 
     lines = [
@@ -276,19 +626,19 @@ def text_coin_analysis(coin: str, data: dict) -> str:
     # ── ЧТО ПРОИСХОДИТ ──
     if what_happening:
         lines.append("")
-        lines.append("<b>ЧТО ПРОИСХОДИТ</b>")
+        lines.append(f"<b>{t('what_happening', lang)}</b>")
         lines.append(html_lib.escape(what_happening))
 
     # ── ЛОВУШКА ──
     if trap:
         lines.append("")
-        lines.append(f"⚠️ <b>ЛОВУШКА</b>")
+        lines.append(f"⚠️ <b>{t('trap', lang)}</b>")
         lines.append(html_lib.escape(trap))
 
     # ── СИГНАЛ ──
     if recommendation:
         lines.append("")
-        sig_text = f"📊 <b>СИГНАЛ:</b> {rec_icon} {rec_label}"
+        sig_text = f"📊 <b>{t('signal', lang)}:</b> {rec_icon} {rec_label}"
         if strength_label:
             sig_text += f" ({strength_label})"
         lines.append(sig_text)
@@ -305,17 +655,14 @@ def text_coin_analysis(coin: str, data: dict) -> str:
         lines.append(f"⏱ {html_lib.escape(horizon)}")
 
     lines.append("")
-    lines.append("━━━ РЫНОК ━━━")
+    lines.append(t("section_market", lang))
 
     # Данные
     sma50_val = d.get("sma50", "—")
     sma200_val = d.get("sma200", "—")
     rsi_val = d.get("rsi", "—")
-    macd_val = d.get("macd", "—")
     fr_val = d.get("funding_rate", "—")
-    oi_val = d.get("oi", "—")
     oi_chg = d.get("oi_change", "—")
-    ob_ratio = d.get("bid_ask_ratio", "—")
     long_p = str(d.get("long_pct", "—")).replace("%", "")
     short_p = str(d.get("short_pct", "—")).replace("%", "")
     fg = d.get("fear_greed", "—")
@@ -329,199 +676,195 @@ def text_coin_analysis(coin: str, data: dict) -> str:
             s50 = float(str(sma50_val).replace("$", "").replace(",", ""))
             s200 = float(str(sma200_val).replace("$", "").replace(",", ""))
             if s50 > s200:
-                lines.append("📈 Тренд: вверх")
+                lines.append(t("trend_up", lang))
             else:
-                lines.append("📉 Тренд: вниз")
+                lines.append(t("trend_down", lang))
         except (ValueError, TypeError):
             pass
 
-    # Давление рынка (Coinglass Taker Buy/Sell — агрессивные маркет-ордера)
+    # Давление рынка
     if _has(long_p) and _has(short_p):
         try:
             lp = float(long_p)
             sp = float(short_p)
             if lp > 55:
-                hint = "быки давят"
+                hint = t("ls_bulls", lang)
             elif sp > 55:
-                hint = "медведи давят"
+                hint = t("ls_bears", lang)
             else:
-                hint = "баланс"
-            lines.append(f"⚖️ Лонг/Шорт: {lp:.0f}% / {sp:.0f}% — {hint}")
+                hint = t("ls_balance", lang)
+            lines.append(f"⚖️ {t('ls_label', lang)}: {lp:.0f}% / {sp:.0f}% — {hint}")
         except (ValueError, TypeError):
-            lines.append(f"⚖️ Лонг/Шорт: {long_p}% / {short_p}%")
+            lines.append(f"⚖️ {t('ls_label', lang)}: {long_p}% / {short_p}%")
 
-    # Фандинг с числом
+    # Фандинг
     if _has(fr_val):
         try:
             fv = float(str(fr_val).replace("%", "").replace("+", ""))
             if fv > 0.01:
-                fr_hint = "лонги платят шортам"
+                fr_hint = t("funding_longs_pay", lang)
             elif fv < -0.005:
-                fr_hint = "шорты платят лонгам"
+                fr_hint = t("funding_shorts_pay", lang)
             else:
-                fr_hint = "баланс"
-            lines.append(f"💰 Фандинг: {fr_val} — {fr_hint}")
+                fr_hint = t("funding_balance", lang)
+            lines.append(f"💰 {t('funding_label', lang)}: {fr_val} — {fr_hint}")
         except (ValueError, TypeError):
-            lines.append(f"💰 Фандинг: {fr_val}")
+            lines.append(f"💰 {t('funding_label', lang)}: {fr_val}")
 
-    # Открытый интерес (OI)
+    # OI
     if _has(oi_chg):
         try:
             oi_v = float(str(oi_chg).replace("%", "").replace("+", ""))
             if oi_v > 0.5:
-                oi_hint = "растёт"
+                oi_hint = t("oi_rising", lang)
             elif oi_v < -0.5:
-                oi_hint = "падает"
+                oi_hint = t("oi_falling", lang)
             else:
-                oi_hint = "стабильно"
-            lines.append(f"📊 Открытый интерес: {oi_chg} ({oi_hint})")
+                oi_hint = t("oi_stable", lang)
+            lines.append(f"📊 {t('oi_label', lang)}: {oi_chg} ({oi_hint})")
         except (ValueError, TypeError):
-            lines.append(f"📊 Открытый интерес: {oi_chg}")
+            lines.append(f"📊 {t('oi_label', lang)}: {oi_chg}")
 
-    # Состояние рынка (RSI)
+    # RSI
     if _has(rsi_val):
         try:
             rv = float(rsi_val)
             if rv > 70:
-                rsi_hint = "перекуплен"
+                rsi_hint = t("rsi_overbought", lang)
             elif rv > 60:
-                rsi_hint = "разогрет"
+                rsi_hint = t("rsi_heated", lang)
             elif rv < 30:
-                rsi_hint = "перепродан"
+                rsi_hint = t("rsi_oversold", lang)
             elif rv < 40:
-                rsi_hint = "охлаждается"
+                rsi_hint = t("rsi_cooling", lang)
             else:
-                rsi_hint = "норма"
-            lines.append(f"🌡 Состояние: {rsi_hint} (RSI {rv:.0f})")
+                rsi_hint = t("rsi_normal", lang)
+            lines.append(f"🌡 {t('state_label', lang)}: {rsi_hint} (RSI {rv:.0f})")
         except (ValueError, TypeError):
             pass
 
-    # Эмоции рынка (Fear & Greed)
+    # Fear & Greed
     if _has(fg):
         try:
             fg_val = int(fg)
             if fg_val <= 25:
-                fg_hint = "паника"
+                fg_hint = t("mood_panic", lang)
             elif fg_val <= 45:
-                fg_hint = "страх"
+                fg_hint = t("mood_fear", lang)
             elif fg_val <= 55:
-                fg_hint = "спокойствие"
+                fg_hint = t("mood_calm", lang)
             elif fg_val <= 75:
-                fg_hint = "жадность"
+                fg_hint = t("mood_greed", lang)
             else:
-                fg_hint = "эйфория"
-            lines.append(f"😰 Настроение рынка: {fg_hint} ({fg}/100)")
+                fg_hint = t("mood_euphoria", lang)
+            lines.append(f"😰 {t('mood_label', lang)}: {fg_hint} ({fg}/100)")
         except (ValueError, TypeError):
             pass
 
     # ── КИТЫ vs ТОЛПА ──
     netflow = d.get("exchange_netflow_btc", "—")
-    eth_gas = d.get("eth_gas_avg", "—")
     has_whale = (coin == "BTC" and _has(netflow))
     has_crowd = _has(bg_long_acc)
 
     if has_whale or has_crowd:
         lines.append("")
-        lines.append("🐋 КИТЫ vs ТОЛПА")
+        lines.append(t("whales_vs_crowd", lang))
 
-        # Киты (Exchange Netflow)
         if has_whale:
             try:
                 nf = float(str(netflow).replace(",", "").replace("+", ""))
                 if nf < -100:
-                    lines.append("киты покупают (выводят с бирж)")
+                    lines.append(t("whales_buying", lang))
                 elif nf > 100:
-                    lines.append("киты продают (заводят на биржи)")
+                    lines.append(t("whales_selling", lang))
                 else:
-                    lines.append("киты выжидают")
+                    lines.append(t("whales_waiting", lang))
             except (ValueError, TypeError):
                 pass
 
-        # Толпа (Bitget Account L/S — ритейл)
         if has_crowd:
             try:
                 bg_l = float(bg_long_acc)
                 bg_s = float(bg_short_acc)
                 if bg_l > 70:
-                    lines.append(f"толпа перегружена лонгами ({bg_l:.0f}%)")
+                    lines.append(t("crowd_overlong", lang, pct=f"{bg_l:.0f}"))
                 elif bg_l > 60:
-                    lines.append(f"толпа в лонгах ({bg_l:.0f}%)")
+                    lines.append(t("crowd_long", lang, pct=f"{bg_l:.0f}"))
                 elif bg_s > 70:
-                    lines.append(f"толпа перегружена шортами ({bg_s:.0f}%)")
+                    lines.append(t("crowd_overshort", lang, pct=f"{bg_s:.0f}"))
                 elif bg_s > 60:
-                    lines.append(f"толпа в шортах ({bg_s:.0f}%)")
+                    lines.append(t("crowd_short", lang, pct=f"{bg_s:.0f}"))
                 else:
-                    lines.append("толпа в балансе")
+                    lines.append(t("crowd_balance", lang))
             except (ValueError, TypeError):
                 pass
 
-    # ETH Gas (только для ETH)
-    if coin == "ETH" and _has(eth_gas):
+    # ETH Gas
+    if coin == "ETH" and _has(d.get("eth_gas_avg", "—")):
+        eth_gas = d.get("eth_gas_avg", "—")
         try:
             gas_v = int(float(str(eth_gas)))
             if gas_v > 50:
-                gas_hint = "высокая нагрузка"
+                gas_hint = t("gas_high", lang)
             elif gas_v > 20:
-                gas_hint = "умеренная"
+                gas_hint = t("gas_medium", lang)
             else:
-                gas_hint = "низкая"
+                gas_hint = t("gas_low", lang)
             lines.append(f"⛽ Gas: {gas_v} Gwei — {gas_hint}")
         except (ValueError, TypeError):
             pass
 
-    # ── ЛИКВИДНОСТЬ (карта ликвидаций — магниты цены) ──
+    # ── ЛИКВИДНОСТЬ ──
     liq_lvl_shorts = d.get("liq_level_shorts", "")
     liq_lvl_longs = d.get("liq_level_longs", "")
     if liq_lvl_shorts or liq_lvl_longs:
         lines.append("")
-        lines.append("━━━ ЛИКВИДНОСТЬ ━━━")
+        lines.append(t("section_liquidity", lang))
         if liq_lvl_shorts:
-            lines.append(f"{html_lib.escape(liq_lvl_shorts)} — стопы шортов")
+            lines.append(f"{html_lib.escape(liq_lvl_shorts)} — {t('shorts_stops', lang)}")
         if liq_lvl_longs:
-            lines.append(f"{html_lib.escape(liq_lvl_longs)} — стопы лонгов")
+            lines.append(f"{html_lib.escape(liq_lvl_longs)} — {t('longs_stops', lang)}")
 
     # ── УРОВНИ ──
     lines.append("")
-    lines.append("━━━ УРОВНИ ━━━")
+    lines.append(t("section_levels", lang))
 
-    # Ликвидации
     liq_up = d.get("liq_up", "—")
     liq_dn = d.get("liq_dn", "—")
     if _has(liq_up) or _has(liq_dn):
-        lines.append("💥 Ликвидации (1ч)")
+        lines.append(f"💥 {t('liq_1h', lang)}")
         if _has(liq_up) and _has(liq_dn):
             try:
                 lu = float(str(liq_up).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
                 ld = float(str(liq_dn).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
                 up_arrow = " ↑" if lu > ld else ""
                 dn_arrow = " ↑" if ld > lu else ""
-                lines.append(f"шорты: {liq_up}{up_arrow}")
-                lines.append(f"лонги: {liq_dn}{dn_arrow}")
+                lines.append(f"{t('liq_shorts', lang)}: {liq_up}{up_arrow}")
+                lines.append(f"{t('liq_longs', lang)}: {liq_dn}{dn_arrow}")
             except (ValueError, TypeError):
-                lines.append(f"шорты: {liq_up}")
-                lines.append(f"лонги: {liq_dn}")
+                lines.append(f"{t('liq_shorts', lang)}: {liq_up}")
+                lines.append(f"{t('liq_longs', lang)}: {liq_dn}")
         else:
             if _has(liq_up):
-                lines.append(f"шорты: {liq_up}")
+                lines.append(f"{t('liq_shorts', lang)}: {liq_up}")
             if _has(liq_dn):
-                lines.append(f"лонги: {liq_dn}")
+                lines.append(f"{t('liq_longs', lang)}: {liq_dn}")
 
     # Вход / Стоп / Цель
     if entry or stop or target:
         lines.append("")
         if entry:
-            lines.append(f"🎯 Вход: {html_lib.escape(entry)}")
+            lines.append(f"{t('entry_label', lang)}: {html_lib.escape(entry)}")
         if stop:
-            lines.append(f"🛑 Стоп: {html_lib.escape(stop)}")
+            lines.append(f"{t('stop_label', lang)}: {html_lib.escape(stop)}")
         if target:
-            lines.append(f"✅ Цель: {html_lib.escape(target)}")
+            lines.append(f"{t('target_label', lang)}: {html_lib.escape(target)}")
     elif buy_zone or sell_zone:
-        # Fallback на старый формат зон
         lines.append("")
         if buy_zone:
-            lines.append(f"🎯 Покупка: {html_lib.escape(buy_zone)}")
+            lines.append(f"{t('buy_label', lang)}: {html_lib.escape(buy_zone)}")
         if sell_zone:
-            lines.append(f"✅ Продажа: {html_lib.escape(sell_zone)}")
+            lines.append(f"{t('sell_label', lang)}: {html_lib.escape(sell_zone)}")
 
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
@@ -539,117 +882,153 @@ def text_coin_analysis(coin: str, data: dict) -> str:
 async def cmd_start(message: Message):
     """Приветствие и регистрация пользователя"""
     user = message.from_user
+    # Определяем язык из TG
+    detected_lang = detect_language(user.language_code)
     await db.upsert_user(
         telegram_id=user.id,
         username=user.username or "",
         first_name=user.first_name or "",
+        language=detected_lang,
     )
-    log.info(f"New user: {user.id} @{user.username}")
-    await message.answer(WELCOME, parse_mode=ParseMode.HTML, reply_markup=kb_main())
+    log.info(f"New user: {user.id} @{user.username} lang={detected_lang}")
+    await message.answer(
+        t("welcome", detected_lang),
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_main(detected_lang),
+    )
 
 
 @dp.message(Command("summary"))
 async def cmd_summary(message: Message):
-    """Радар рынка"""
+    lang = await get_user_lang(message.from_user.id)
     coins = COINS
     data  = await db.get_market_data(coins)
     await message.answer(
-        text_radar(coins, data),
+        text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_radar()
+        reply_markup=kb_radar(page=0, lang=lang)
     )
 
 
 @dp.message(Command("settings"))
 async def cmd_settings(message: Message):
     user_id = message.from_user.id
+    lang = await get_user_lang(user_id)
     user    = await db.get_user(user_id)
     plan    = user.get("plan", "free") if user else "free"
     interval= user.get("interval", 60) if user else 60
     alerts  = user.get("alerts_enabled", True) if user else True
-    alert_status = "🔔 Включены" if alerts else "🔕 Выключены"
+    alert_status = t("alerts_enabled", lang) if alerts else t("alerts_disabled", lang)
     await message.answer(
-        f"<b>⚙️ Настройки</b>\n\n"
-        f"Тариф: <b>{plan.upper()}</b>\n"
-        f"Обновление: <b>каждые {interval} мин</b>\n"
-        f"Алерты: <b>{alert_status}</b>\n\n"
-        f"Выбери интервал обновления:",
+        f"<b>{t('settings_title', lang)}</b>\n\n"
+        f"{t('settings_plan', lang)}: <b>{plan.upper()}</b>\n"
+        f"{t('settings_interval', lang)}: <b>{t('settings_every', lang, interval=interval)}</b>\n"
+        f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
+        f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_settings(alerts)
+        reply_markup=kb_settings(alerts, lang)
     )
 
 
 @dp.message(Command("status"))
 async def cmd_status(message: Message):
     user_id = message.from_user.id
-    user    = await db.get_user(user_id)
+    lang = await get_user_lang(user_id)
+    user = await db.get_user(user_id)
     if not user:
-        await message.answer("Ты ещё не зарегистрирован. Напиши /start")
+        await message.answer(t("not_registered", lang))
         return
-    plan    = user.get("plan", "free")
-    coins   = user.get("coins", [])
-    interval= user.get("interval", 60)
+    plan     = user.get("plan", "free")
+    coins    = user.get("coins", [])
+    interval = user.get("interval", 60)
     await message.answer(
-        f"<b>📋 Твой статус</b>\n\n"
-        f"Тариф: <b>{plan.upper()}</b>\n"
-        f"Монет отслеживается: <b>{len(coins)}</b>\n"
-        f"Интервал обновления: <b>{interval} мин</b>",
+        f"<b>{t('status_title', lang)}</b>\n\n"
+        f"{t('status_plan', lang)}: <b>{plan.upper()}</b>\n"
+        f"{t('status_coins', lang)}: <b>{len(coins)}</b>\n"
+        f"{t('status_interval', lang)}: <b>{interval} мин</b>",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_main()
+        reply_markup=kb_main(lang)
     )
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# ХЕНДЛЕРЫ CALLBACK (нажатия на кнопки)
+# ХЕНДЛЕРЫ CALLBACK
 # ══════════════════════════════════════════════════════════════════════════════
+
+@dp.callback_query(F.data == "noop")
+async def cb_noop(call: CallbackQuery):
+    await call.answer()
+
 
 @dp.callback_query(F.data == "summary")
 async def cb_summary(call: CallbackQuery):
-    """Радар рынка (legacy callback)"""
+    lang = await get_user_lang(call.from_user.id)
     coins = COINS
     data  = await db.get_market_data(coins)
     await call.message.edit_text(
-        text_radar(coins, data),
+        text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_radar()
+        reply_markup=kb_radar(page=0, lang=lang)
     )
     await call.answer()
 
 
 @dp.callback_query(F.data == "radar")
 async def cb_radar(call: CallbackQuery):
-    """📡 Радар рынка"""
+    lang = await get_user_lang(call.from_user.id)
     coins = COINS
     data  = await db.get_market_data(coins)
     await call.message.edit_text(
-        text_radar(coins, data),
+        text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_radar()
+        reply_markup=kb_radar(page=0, lang=lang)
     )
     await call.answer()
 
 
 @dp.callback_query(F.data == "refresh")
 async def cb_refresh(call: CallbackQuery):
-    """🔄 Обновить радар"""
+    lang = await get_user_lang(call.from_user.id)
     coins = COINS
     data  = await db.get_market_data(coins)
     await call.message.edit_text(
-        text_radar(coins, data),
+        text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_radar()
+        reply_markup=kb_radar(page=0, lang=lang)
     )
-    await call.answer("🔄 Обновлено!")
+    await call.answer(t("refreshed", lang))
+
+
+@dp.callback_query(F.data.startswith("page_"))
+async def cb_page(call: CallbackQuery):
+    """Пагинация монет"""
+    lang = await get_user_lang(call.from_user.id)
+    page = int(call.data.replace("page_", ""))
+    coins = COINS
+    data  = await db.get_market_data(coins)
+    await call.message.edit_text(
+        text_radar(coins, data, lang),
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_radar(page=page, lang=lang)
+    )
+    await call.answer()
 
 
 @dp.callback_query(F.data.startswith("coin_"))
 async def cb_coin(call: CallbackQuery):
-    """Компактный анализ монеты"""
+    lang = await get_user_lang(call.from_user.id)
     coin = call.data.replace("coin_", "")
+    # Определяем страницу этой монеты
+    try:
+        idx = COINS.index(coin)
+        page = idx // COINS_PER_PAGE
+    except ValueError:
+        page = 0
     data = await db.get_market_data([coin])
     await call.message.edit_text(
-        text_coin_analysis(coin, data),
+        text_coin_analysis(coin, data, lang),
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_coin_detail(coin)
+        reply_markup=kb_coin_detail(coin, page=page, lang=lang)
     )
     await call.answer()
 
@@ -657,19 +1036,20 @@ async def cb_coin(call: CallbackQuery):
 @dp.callback_query(F.data == "settings")
 async def cb_settings(call: CallbackQuery):
     user_id = call.from_user.id
+    lang = await get_user_lang(user_id)
     user    = await db.get_user(user_id)
     plan    = user.get("plan", "free") if user else "free"
     interval= user.get("interval", 60) if user else 60
     alerts  = user.get("alerts_enabled", True) if user else True
-    alert_status = "🔔 Включены" if alerts else "🔕 Выключены"
+    alert_status = t("alerts_enabled", lang) if alerts else t("alerts_disabled", lang)
     await call.message.edit_text(
-        f"<b>⚙️ Настройки</b>\n\n"
-        f"Тариф: <b>{plan.upper()}</b>\n"
-        f"Обновление: <b>каждые {interval} мин</b>\n"
-        f"Алерты: <b>{alert_status}</b>\n\n"
-        f"Выбери интервал обновления:",
+        f"<b>{t('settings_title', lang)}</b>\n\n"
+        f"{t('settings_plan', lang)}: <b>{plan.upper()}</b>\n"
+        f"{t('settings_interval', lang)}: <b>{t('settings_every', lang, interval=interval)}</b>\n"
+        f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
+        f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_settings(alerts)
+        reply_markup=kb_settings(alerts, lang)
     )
     await call.answer()
 
@@ -679,21 +1059,21 @@ async def cb_interval(call: CallbackQuery):
     interval = int(call.data.replace("interval_", ""))
     user_id  = call.from_user.id
     await db.update_user(user_id, {"interval": interval})
-    # Обновляем экран настроек
+    lang = await get_user_lang(user_id)
     user = await db.get_user(user_id)
     alerts = user.get("alerts_enabled", True) if user else True
     plan = user.get("plan", "free") if user else "free"
-    alert_status = "🔔 Включены" if alerts else "🔕 Выключены"
+    alert_status = t("alerts_enabled", lang) if alerts else t("alerts_disabled", lang)
     await call.message.edit_text(
-        f"<b>⚙️ Настройки</b>\n\n"
-        f"Тариф: <b>{plan.upper()}</b>\n"
-        f"Обновление: <b>каждые {interval} мин</b>\n"
-        f"Алерты: <b>{alert_status}</b>\n\n"
-        f"Выбери интервал обновления:",
+        f"<b>{t('settings_title', lang)}</b>\n\n"
+        f"{t('settings_plan', lang)}: <b>{plan.upper()}</b>\n"
+        f"{t('settings_interval', lang)}: <b>{t('settings_every', lang, interval=interval)}</b>\n"
+        f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
+        f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_settings(alerts)
+        reply_markup=kb_settings(alerts, lang)
     )
-    await call.answer(f"✅ Интервал: {interval} мин")
+    await call.answer(t("interval_set", lang, interval=interval))
 
 
 @dp.callback_query(F.data.startswith("toggle_alerts_"))
@@ -701,39 +1081,68 @@ async def cb_toggle_alerts(call: CallbackQuery):
     user_id = call.from_user.id
     enable = call.data == "toggle_alerts_on"
     await db.update_user(user_id, {"alerts_enabled": enable})
+    lang = await get_user_lang(user_id)
     user = await db.get_user(user_id)
     plan = user.get("plan", "free") if user else "free"
     interval = user.get("interval", 60) if user else 60
-    alert_status = "🔔 Включены" if enable else "🔕 Выключены"
+    alert_status = t("alerts_enabled", lang) if enable else t("alerts_disabled", lang)
     await call.message.edit_text(
-        f"<b>⚙️ Настройки</b>\n\n"
-        f"Тариф: <b>{plan.upper()}</b>\n"
-        f"Обновление: <b>каждые {interval} мин</b>\n"
-        f"Алерты: <b>{alert_status}</b>\n\n"
-        f"Выбери интервал обновления:",
+        f"<b>{t('settings_title', lang)}</b>\n\n"
+        f"{t('settings_plan', lang)}: <b>{plan.upper()}</b>\n"
+        f"{t('settings_interval', lang)}: <b>{t('settings_every', lang, interval=interval)}</b>\n"
+        f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
+        f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_settings(enable)
+        reply_markup=kb_settings(enable, lang)
     )
-    status_text = "🔔 Алерты включены" if enable else "🔕 Алерты выключены"
+    status_text = t("alerts_on_short", lang) if enable else t("alerts_off_short", lang)
     await call.answer(status_text)
+
+
+@dp.callback_query(F.data == "toggle_lang")
+async def cb_toggle_lang(call: CallbackQuery):
+    """Переключение языка RU ↔ EN"""
+    user_id = call.from_user.id
+    current_lang = await get_user_lang(user_id)
+    new_lang = "en" if current_lang == "ru" else "ru"
+    await db.update_user(user_id, {"language": new_lang})
+
+    # Обновляем экран настроек на новом языке
+    user = await db.get_user(user_id)
+    plan = user.get("plan", "free") if user else "free"
+    interval = user.get("interval", 60) if user else 60
+    alerts = user.get("alerts_enabled", True) if user else True
+    alert_status = t("alerts_enabled", new_lang) if alerts else t("alerts_disabled", new_lang)
+    await call.message.edit_text(
+        f"<b>{t('settings_title', new_lang)}</b>\n\n"
+        f"{t('settings_plan', new_lang)}: <b>{plan.upper()}</b>\n"
+        f"{t('settings_interval', new_lang)}: <b>{t('settings_every', new_lang, interval=interval)}</b>\n"
+        f"{t('settings_alerts', new_lang)}: <b>{alert_status}</b>\n\n"
+        f"{t('settings_choose_interval', new_lang)}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_settings(alerts, new_lang)
+    )
+    await call.answer(f"🌐 {'English' if new_lang == 'en' else 'Русский'}")
 
 
 @dp.callback_query(F.data == "subscription")
 async def cb_subscription(call: CallbackQuery):
+    lang = await get_user_lang(call.from_user.id)
     await call.message.edit_text(
-        "<b>💳 Выбери тариф</b>\n\n"
-        "🆓 <b>Free</b> — 1 монета, LLM-анализ, 15 мин\n"
-        "🟢 <b>Basic $14/мес</b> — топ-20, LLM-анализ, 5/15/60 мин\n"
-        "🟡 <b>Pro $29/мес</b> — все метрики, дашборд, 3 темы\n"
-        "🔴 <b>Pro+ $49/мес</b> — алерты 1-2 мин, сканер 200 монет",
+        f"<b>{t('sub_title', lang)}</b>\n\n"
+        f"{t('sub_free', lang)}\n"
+        f"{t('sub_basic', lang)}\n"
+        f"{t('sub_pro', lang)}\n"
+        f"{t('sub_pro_plus', lang)}",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_subscription()
+        reply_markup=kb_subscription(lang)
     )
     await call.answer()
 
 
 @dp.callback_query(F.data.startswith("plan_"))
 async def cb_plan(call: CallbackQuery):
+    lang = await get_user_lang(call.from_user.id)
     plan_map = {
         "plan_basic":    ("Basic", "$14/мес"),
         "plan_pro":      ("Pro",   "$29/мес"),
@@ -741,20 +1150,20 @@ async def cb_plan(call: CallbackQuery):
     }
     plan_key  = call.data
     plan_name, plan_price = plan_map.get(plan_key, ("?", "?"))
-    # TODO: здесь будет Telegram Payments
     await call.answer(
-        f"💳 Оплата {plan_name} {plan_price} — скоро будет доступно!",
+        t("payment_soon", lang, name=plan_name, price=plan_price),
         show_alert=True
     )
 
 
 @dp.callback_query(F.data == "help")
 async def cb_help(call: CallbackQuery):
+    lang = await get_user_lang(call.from_user.id)
     await call.message.edit_text(
-        HELP_TEXT,
+        t("help", lang),
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀ Назад", callback_data="back_main")]
+            [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_main")]
         ])
     )
     await call.answer()
@@ -762,10 +1171,11 @@ async def cb_help(call: CallbackQuery):
 
 @dp.callback_query(F.data == "back_main")
 async def cb_back_main(call: CallbackQuery):
+    lang = await get_user_lang(call.from_user.id)
     await call.message.edit_text(
-        WELCOME,
+        t("welcome", lang),
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_main()
+        reply_markup=kb_main(lang)
     )
     await call.answer()
 
@@ -774,10 +1184,7 @@ async def cb_back_main(call: CallbackQuery):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def send_alerts():
-    """
-    Рассылка алертов пользователям по их расписанию.
-    Вызывается после каждого цикла сбора данных.
-    """
+    """Рассылка алертов пользователям по их расписанию."""
     try:
         users = await db.get_users_for_alerts()
         if not users:
@@ -786,7 +1193,6 @@ async def send_alerts():
         log.info(f"📨 Алерты: {len(users)} пользователей в очереди")
         coins = COINS
         data = await db.get_market_data(coins)
-        text = text_radar(coins, data)
 
         sent = 0
         for user in users:
@@ -794,15 +1200,16 @@ async def send_alerts():
             if not tid:
                 continue
             try:
+                lang = user.get("language", "ru") or "ru"
+                text = text_radar(coins, data, lang)
                 await bot.send_message(
                     chat_id=tid,
                     text=text,
                     parse_mode=ParseMode.HTML,
-                    reply_markup=kb_radar()
+                    reply_markup=kb_radar(page=0, lang=lang)
                 )
                 await db.update_last_alert(tid)
                 sent += 1
-                # Пауза между отправками (анти-флуд Telegram: 30 msg/sec)
                 await asyncio.sleep(0.1)
             except Exception as e:
                 log.warning(f"  ⚠️ Алерт {tid}: {e}")
@@ -815,12 +1222,8 @@ async def send_alerts():
 
 
 async def alert_loop():
-    """
-    Цикл рассылки алертов — проверяет каждую минуту,
-    кому из пользователей пора слать сводку.
-    """
+    """Цикл рассылки алертов."""
     log.info("📨 Алерт-цикл запущен (проверка каждую минуту)")
-    # Ждём первый сбор данных
     await asyncio.sleep(120)
 
     while True:
@@ -828,18 +1231,13 @@ async def alert_loop():
             await send_alerts()
         except Exception as e:
             log.error(f"Alert loop error: {e}")
-        await asyncio.sleep(60)  # Проверяем каждую минуту
+        await asyncio.sleep(60)
 
 
 async def main():
     log.info("⚡ Zender Terminal Bot — starting...")
-
-    # Коллектор данных — каждые 5 мин (самый быстрый тариф Basic)
     asyncio.create_task(collector_loop(interval_minutes=5))
-
-    # Алерт-цикл — проверяет и рассылает каждую минуту
     asyncio.create_task(alert_loop())
-
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
