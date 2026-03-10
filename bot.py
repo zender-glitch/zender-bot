@@ -564,7 +564,7 @@ async def cmd_settings(message: Message):
     user_id = message.from_user.id
     user    = await db.get_user(user_id)
     plan    = user.get("plan", "free") if user else "free"
-    interval= user.get("interval", 15) if user else 15
+    interval= user.get("interval", 60) if user else 60
     alerts  = user.get("alerts_enabled", True) if user else True
     alert_status = "🔔 Включены" if alerts else "🔕 Выключены"
     await message.answer(
@@ -587,7 +587,7 @@ async def cmd_status(message: Message):
         return
     plan    = user.get("plan", "free")
     coins   = user.get("coins", [])
-    interval= user.get("interval", 15)
+    interval= user.get("interval", 60)
     await message.answer(
         f"<b>📋 Твой статус</b>\n\n"
         f"Тариф: <b>{plan.upper()}</b>\n"
@@ -658,7 +658,7 @@ async def cb_settings(call: CallbackQuery):
     user_id = call.from_user.id
     user    = await db.get_user(user_id)
     plan    = user.get("plan", "free") if user else "free"
-    interval= user.get("interval", 15) if user else 15
+    interval= user.get("interval", 60) if user else 60
     alerts  = user.get("alerts_enabled", True) if user else True
     alert_status = "🔔 Включены" if alerts else "🔕 Выключены"
     await call.message.edit_text(
@@ -702,7 +702,7 @@ async def cb_toggle_alerts(call: CallbackQuery):
     await db.update_user(user_id, {"alerts_enabled": enable})
     user = await db.get_user(user_id)
     plan = user.get("plan", "free") if user else "free"
-    interval = user.get("interval", 15) if user else 15
+    interval = user.get("interval", 60) if user else 60
     alert_status = "🔔 Включены" if enable else "🔕 Выключены"
     await call.message.edit_text(
         f"<b>⚙️ Настройки</b>\n\n"

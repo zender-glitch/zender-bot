@@ -79,7 +79,7 @@ class Database:
             users_to_alert = []
 
             for user in res.data:
-                interval = user.get("interval", 15) or 15
+                interval = user.get("interval", 60) or 60
                 last_alert = user.get("last_alert_at")
 
                 if last_alert is None:
