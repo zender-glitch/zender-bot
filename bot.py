@@ -36,7 +36,7 @@ dp  = Dispatcher()
 COINS = [
     "BTC", "ETH", "BNB", "SOL", "XRP",
     "ADA", "DOGE", "AVAX", "DOT", "LINK",
-    "MATIC", "TRX", "SHIB", "UNI", "LTC",
+    "POL", "TRX", "SHIB", "UNI", "LTC",
     "ATOM", "NEAR", "APT", "ARB", "OP",
 ]
 
@@ -1174,11 +1174,11 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
         else:
             sig = "⚪HOLD"
 
-        # Моноширинная строка для выравнивания кружков
-        # BTC   $69,577  -1.80%  🟢BUY
+        # Моноширинная строка — компактная для iPhone
+        # BTC  $69,577 -1.80%  🟢BUY
         _coin_s = f"{coin:<5}"
-        _price_s = f"{price:>10}"
-        _chg_s = f"{change:>8}"
+        _price_s = f"{price:>8}"
+        _chg_s = f"{change:>7}"
         lines.append(f"<code>{_coin_s}{_price_s} {_chg_s}</code> {sig}")
 
     # Fear & Greed из BTC данных
@@ -1817,7 +1817,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     ai_score_str = d.get("ai_score", "")
     ai_score_label_val = d.get("ai_score_label", "")
     score_part = ""
-    if ai_score_str and ai_score_str != "50":
+    if ai_score_str and ai_score_str not in ("", "—"):
         try:
             ai_sc = int(float(str(ai_score_str)))
             if ai_sc >= 70:
@@ -2306,8 +2306,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         lines.append(f"💥 {t('liq_1h', lang)}")
         if _has(liq_up) and _has(liq_dn):
             try:
-                lu = float(str(liq_up).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
-                ld = float(str(liq_dn).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
+                lu = float(str(liq_up).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6").replace(" млрд", "e9").replace("млрд", "e9"))
+                ld = float(str(liq_dn).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6").replace(" млрд", "e9").replace("млрд", "e9"))
                 up_arrow = " ↑" if lu > ld else ""
                 dn_arrow = " ↑" if ld > lu else ""
                 lines.append(f"🟢 {t('liq_shorts', lang)}: <b>{liq_up}</b>{up_arrow}")
@@ -2565,7 +2565,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         try:
             pb = int(float(str(prob_bull)))
             pr = int(float(str(prob_bear)))
-            if pb != 50 or pr != 50:
+            if pb > 0 or pr > 0:
                 lines.append("")
                 gauge_title = "ДАВЛЕНИЕ РЫНКА" if lang == "ru" else "MARKET PRESSURE"
                 lines.append(f"<b>📊 {gauge_title}</b>")
@@ -2648,8 +2648,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
 
         # 4. Liquidations
         try:
-            _lu = float(str(d.get("liq_up", "0")).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
-            _ld = float(str(d.get("liq_dn", "0")).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
+            _lu = float(str(d.get("liq_up", "0")).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6").replace(" млрд", "e9").replace("млрд", "e9"))
+            _ld = float(str(d.get("liq_dn", "0")).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6").replace(" млрд", "e9").replace("млрд", "e9"))
             if _lu + _ld > 0:
                 _liq_ratio = _lu / (_lu + _ld)
                 if _liq_ratio > 0.6:

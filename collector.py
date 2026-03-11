@@ -68,7 +68,7 @@ WHALE_ALERT_BASE = "https://api.whale-alert.io/v1"
 WHALE_ALERT_CURRENCIES = {
     "BTC": "btc", "ETH": "eth", "BNB": "bnb", "SOL": "sol", "XRP": "xrp",
     "ADA": "ada", "DOGE": "doge", "AVAX": "avax", "DOT": "dot", "LINK": "link",
-    "MATIC": "matic", "TRX": "trx", "SHIB": "shib", "UNI": "uni", "LTC": "ltc",
+    "POL": "matic", "TRX": "trx", "SHIB": "shib", "UNI": "uni", "LTC": "ltc",
     "ATOM": "atom", "NEAR": "near", "APT": "apt", "ARB": "arb", "OP": "op",
 }
 
@@ -94,7 +94,7 @@ CG_HEADERS = {
 COINS = [
     "BTC", "ETH", "BNB", "SOL", "XRP",
     "ADA", "DOGE", "AVAX", "DOT", "LINK",
-    "MATIC", "TRX", "SHIB", "UNI", "LTC",
+    "POL", "TRX", "SHIB", "UNI", "LTC",
     "ATOM", "NEAR", "APT", "ARB", "OP",
 ]
 
@@ -110,7 +110,7 @@ COINGECKO_IDS = {
     "AVAX": "avalanche-2",
     "DOT": "polkadot",
     "LINK": "chainlink",
-    "MATIC": "matic-network",
+    "POL": "polygon-ecosystem-token",
     "TRX": "tron",
     "SHIB": "shiba-inu",
     "UNI": "uniswap",
@@ -1086,7 +1086,7 @@ BINANCE_FUTURES_MAP = {
     "AVAX": "AVAXUSDT",
     "DOT": "DOTUSDT",
     "LINK": "LINKUSDT",
-    "MATIC": "MATICUSDT",
+    "POL": "POLUSDT",
     "TRX": "TRXUSDT",
     "SHIB": "SHIBUSDT",
     "UNI": "UNIUSDT",
@@ -1304,7 +1304,7 @@ SPOT_PERP_CACHE_TTL = 10 * 60  # 10 мин — объёмы меняются м�
 BINANCE_SPOT_MAP = {
     "BTC": "BTCUSDT", "ETH": "ETHUSDT", "BNB": "BNBUSDT", "SOL": "SOLUSDT",
     "XRP": "XRPUSDT", "ADA": "ADAUSDT", "DOGE": "DOGEUSDT", "AVAX": "AVAXUSDT",
-    "DOT": "DOTUSDT", "LINK": "LINKUSDT", "MATIC": "MATICUSDT", "TRX": "TRXUSDT",
+    "DOT": "DOTUSDT", "LINK": "LINKUSDT", "POL": "POLUSDT", "TRX": "TRXUSDT",
     "SHIB": "SHIBUSDT", "UNI": "UNIUSDT", "LTC": "LTCUSDT", "ATOM": "ATOMUSDT",
     "NEAR": "NEARUSDT", "APT": "APTUSDT", "ARB": "ARBUSDT", "OP": "OPUSDT",
 }
@@ -1569,7 +1569,7 @@ CROSS_EXCHANGE_TTL = 15 * 60  # 15 минут
 
 
 # Пары которые поддерживают L/S на Bitget (BNB, AVAX — не поддерживаются)
-BITGET_LS_SUPPORTED = {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "DOT", "LINK", "AVAX", "MATIC", "UNI", "LTC", "ATOM", "NEAR", "APT", "ARB", "OP"}
+BITGET_LS_SUPPORTED = {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "DOT", "LINK", "AVAX", "POL", "UNI", "LTC", "ATOM", "NEAR", "APT", "ARB", "OP"}
 
 
 async def fetch_bitget_ls(symbol: str) -> dict:
@@ -1681,7 +1681,7 @@ KRAKEN_FUTURES_SYMBOLS = {
     "LINK": "PF_LINKUSD",
     "LTC": "PF_LTCUSD",
     "ATOM": "PF_ATOMUSD",
-    # BNB, AVAX, MATIC, TRX, SHIB, UNI, NEAR, APT, ARB, OP — нет на Kraken Futures
+    # BNB, AVAX, POL, TRX, SHIB, UNI, NEAR, APT, ARB, OP — нет на Kraken Futures
 }
 
 KRAKEN_CACHE = {}
@@ -1820,7 +1820,7 @@ DYDX_SYMBOLS = {
     "AVAX": "AVAX-USD",
     "DOT": "DOT-USD",
     "LINK": "LINK-USD",
-    "MATIC": "MATIC-USD",
+    "POL": "POL-USD",
     "TRX": "TRX-USD",
     "SHIB": "SHIB-USD",
     "UNI": "UNI-USD",
