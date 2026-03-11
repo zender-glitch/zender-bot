@@ -82,7 +82,9 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
 ⚡ t.me/ZenderTerminal_bot""",
 
         # Кнопки
-        "btn_radar": "📡 Радар рынка",
+        "btn_radar": "📡 Радар",
+        "btn_scanner": "🔎 Сканер",
+        "btn_danger": "🚨 Danger",
         "btn_settings": "⚙️ Настройки",
         "btn_subscription": "💳 Подписка",
         "btn_help": "❓ Помощь",
@@ -508,7 +510,9 @@ Santiment · Deribit · Nansen · and 20+ more
 ⚡ t.me/ZenderTerminal_bot""",
 
         # Buttons
-        "btn_radar": "📡 Market Radar",
+        "btn_radar": "📡 Radar",
+        "btn_scanner": "🔎 Scanner",
+        "btn_danger": "🚨 Danger",
         "btn_settings": "⚙️ Settings",
         "btn_subscription": "💳 Subscription",
         "btn_help": "❓ Help",
@@ -980,11 +984,12 @@ def kb_main(lang: str = "ru"):
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=t("btn_radar", lang), callback_data="radar"),
-            InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
+            InlineKeyboardButton(text=t("btn_scanner", lang), callback_data="scanner"),
+            InlineKeyboardButton(text=t("btn_danger", lang), callback_data="danger"),
         ],
         [
+            InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
             InlineKeyboardButton(text=t("btn_subscription", lang), callback_data="subscription"),
-            InlineKeyboardButton(text=t("btn_faq", lang), callback_data="faq"),
             InlineKeyboardButton(text=t("btn_help", lang), callback_data="help"),
         ],
     ])
@@ -1144,7 +1149,7 @@ def _change_icon(change_str: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
-    """📡 РАДАР РЫНКА — компактный обзор всех монет."""
+    """📡 РАДАР РЫНКА — ультра-компактный обзор для мобильных."""
     lines = [
         f"<b>{t('radar_title', lang)}</b>",
         "",
@@ -1155,19 +1160,19 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
         price  = d.get("price",  "—")
         change = d.get("change", "—")
         rec    = d.get("recommendation", "")
-        r_icon  = _rec_icon(rec)
+        ch_icon = _change_icon(change)
 
-        # Короткий код сигнала с символом направления
+        # Короткий сигнал: ▲ ▼ ●
         r = str(rec).lower()
         if "покупать" in r or "buy" in r:
-            sig_code = "▲ BUY" if lang == "en" else "▲ ПОКУПАТЬ"
+            sig = "▲"
         elif "продавать" in r or "sell" in r:
-            sig_code = "▼ ПРОДАВАТЬ" if lang == "ru" else "▼ SELL"
+            sig = "▼"
         else:
-            sig_code = "● ДЕРЖАТЬ" if lang == "ru" else "● HOLD"
+            sig = "·"
 
-        # Одна строка: иконка МОНЕТА цена change · СИГНАЛ (жирный)
-        lines.append(f"{r_icon} <b>{coin}</b> {price} {change} · <b>{sig_code}</b>")
+        # Одна короткая строка: 🔴 BTC $69,577 -1.80%
+        lines.append(f"{ch_icon} <b>{coin}</b> {price} {change}")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
@@ -1189,13 +1194,579 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
                 fg_emoji = "🤑"
         except (ValueError, TypeError):
             fg_emoji = ""
-        lines.append(f"{fg_emoji} <b>{t('market_mood', lang)}</b>")
-        lines.append(f"{fg_label} ({fg}/100)")
+        lines.append(f"{fg_emoji} {fg_label} ({fg}/100)")
 
     lines.append("")
-    lines.append(t("press_coin", lang))
+    _tap = "⬇ Монета = анализ" if lang == "ru" else "⬇ Tap coin = analysis"
+    lines.append(_tap)
 
     return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SCANNER — анализ давления и возможностей по всем монетам
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _calc_coin_pressure(d: dict) -> dict:
+    """Рассчитывает давление рынка для одной монеты.
+    Возвращает: bull_pct, bear_pct, signal_type, signal_icon, reason_ru, reason_en, score."""
+    signals = []  # (direction, weight)
+    reasons_ru = []
+    reasons_en = []
+
+    # 1. Funding
+    try:
+        _fr = float(str(d.get("funding_rate", "0")).replace("%", "").replace("+", ""))
+        if _fr > 0.02:
+            signals.append((-1, 2.0))
+            reasons_ru.append("лонги перегружены")
+            reasons_en.append("longs crowded")
+        elif _fr > 0.01:
+            signals.append((-1, 1.0))
+            reasons_ru.append("лонги платят")
+            reasons_en.append("longs paying")
+        elif _fr < -0.01:
+            signals.append((1, 2.0))
+            reasons_ru.append("шорты перегружены")
+            reasons_en.append("shorts crowded")
+        elif _fr < -0.005:
+            signals.append((1, 1.0))
+            reasons_ru.append("шорты платят")
+            reasons_en.append("shorts paying")
+    except (ValueError, TypeError):
+        pass
+
+    # 2. CVD
+    try:
+        _cv = float(str(d.get("cvd_value", "0")))
+        if _cv > 1.0:
+            signals.append((1, 1.5))
+            reasons_ru.append("CVD: покупатели")
+            reasons_en.append("CVD: buyers")
+        elif _cv < -1.0:
+            signals.append((-1, 1.5))
+            reasons_ru.append("CVD: продавцы")
+            reasons_en.append("CVD: sellers")
+    except (ValueError, TypeError):
+        pass
+
+    # 3. OI change
+    try:
+        _oi = float(str(d.get("oi_change", "0")).replace("%", "").replace("+", ""))
+        if _oi > 2.0:
+            signals.append((1 if len([s for s in signals if s[0] > 0]) > len([s for s in signals if s[0] < 0]) else -1, 1.0))
+            reasons_ru.append(f"OI +{_oi:.1f}%")
+            reasons_en.append(f"OI +{_oi:.1f}%")
+        elif _oi < -2.0:
+            reasons_ru.append(f"OI {_oi:.1f}%")
+            reasons_en.append(f"OI {_oi:.1f}%")
+    except (ValueError, TypeError):
+        pass
+
+    # 4. Liquidations
+    try:
+        _lu = float(str(d.get("liq_up", "0")).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6").replace(" млрд", "e9").replace("млрд", "e9"))
+        _ld = float(str(d.get("liq_dn", "0")).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6").replace(" млрд", "e9").replace("млрд", "e9"))
+        if _lu + _ld > 0:
+            _liq_ratio = _lu / (_lu + _ld)
+            if _liq_ratio > 0.65:
+                signals.append((1, 1.5))
+                reasons_ru.append("шортов ликвидируют")
+                reasons_en.append("shorts liquidated")
+            elif _liq_ratio < 0.35:
+                signals.append((-1, 1.5))
+                reasons_ru.append("лонгов ликвидируют")
+                reasons_en.append("longs liquidated")
+    except (ValueError, TypeError):
+        pass
+
+    # 5. Whales
+    _wd = d.get("whale_direction", "")
+    if _wd == "bullish":
+        signals.append((1, 1.5))
+        reasons_ru.append("киты выводят")
+        reasons_en.append("whales withdrawing")
+    elif _wd == "bearish":
+        signals.append((-1, 1.5))
+        reasons_ru.append("киты заводят")
+        reasons_en.append("whales depositing")
+
+    # 6. OBI
+    try:
+        _obi = float(str(d.get("obi_value", "0")))
+        if _obi > 0.15:
+            signals.append((1, 0.8))
+        elif _obi < -0.15:
+            signals.append((-1, 0.8))
+    except (ValueError, TypeError):
+        pass
+
+    # Рассчитываем итоговое давление
+    if not signals:
+        return {"bull_pct": 50, "bear_pct": 50, "signal_type": "neutral",
+                "signal_icon": "🟡", "reason_ru": "нет данных", "reason_en": "no data", "score": 0}
+
+    _total_weight = sum(w for _, w in signals)
+    _weighted_sum = sum(d_ * w for d_, w in signals)
+    _raw_score = _weighted_sum / _total_weight if _total_weight > 0 else 0
+    _bull_pct = int(50 + _raw_score * 50)
+    _bull_pct = max(5, min(95, _bull_pct))
+    _bear_pct = 100 - _bull_pct
+
+    # Определяем тип сигнала
+    try:
+        _fr_val = float(str(d.get("funding_rate", "0")).replace("%", "").replace("+", ""))
+    except (ValueError, TypeError):
+        _fr_val = 0
+    try:
+        _oi_val = float(str(d.get("oi_change", "0")).replace("%", "").replace("+", ""))
+    except (ValueError, TypeError):
+        _oi_val = 0
+    try:
+        _price_chg = abs(float(str(d.get("change", "0")).replace("%", "").replace("+", "").replace("−", "-").replace("–", "-")))
+    except (ValueError, TypeError):
+        _price_chg = 0
+
+    # Squeeze detection
+    if _fr_val < -0.01 and _bull_pct > 60:
+        signal_type = "squeeze"
+        signal_icon = "🧨"
+        reason_ru = "short squeeze"
+        reason_en = "short squeeze"
+    elif _fr_val > 0.02 and _bear_pct > 60:
+        signal_type = "dump_risk"
+        signal_icon = "⚠️"
+        reason_ru = "dump risk"
+        reason_en = "dump risk"
+    elif _oi_val > 3.0 and _price_chg < 1.5:
+        signal_type = "pre_move"
+        signal_icon = "🟠"
+        reason_ru = "pre-move"
+        reason_en = "pre-move"
+    elif _bull_pct >= 65:
+        signal_type = "bullish"
+        signal_icon = "🟢"
+        reason_ru = reasons_ru[0] if reasons_ru else "бычье давление"
+        reason_en = reasons_en[0] if reasons_en else "bull pressure"
+    elif _bear_pct >= 65:
+        signal_type = "bearish"
+        signal_icon = "🔴"
+        reason_ru = reasons_ru[0] if reasons_ru else "медвежье давление"
+        reason_en = reasons_en[0] if reasons_en else "bear pressure"
+    else:
+        signal_type = "neutral"
+        signal_icon = "🟡"
+        reason_ru = "нейтрально"
+        reason_en = "neutral"
+
+    return {
+        "bull_pct": _bull_pct, "bear_pct": _bear_pct,
+        "signal_type": signal_type, "signal_icon": signal_icon,
+        "reason_ru": reason_ru, "reason_en": reason_en,
+        "score": abs(_bull_pct - 50),
+    }
+
+
+def _signal_type_label(sig_type: str, lang: str) -> str:
+    labels = {
+        "squeeze": ("Short Squeeze", "Short Squeeze"),
+        "dump_risk": ("Dump Risk", "Dump Risk"),
+        "pre_move": ("Pre-Move", "Pre-Move"),
+        "bullish": ("Bull Pressure", "Бычье давление"),
+        "bearish": ("Bear Pressure", "Медвежье давление"),
+        "neutral": ("Neutral", "Нейтрально"),
+    }
+    en, ru = labels.get(sig_type, ("—", "—"))
+    return ru if lang == "ru" else en
+
+
+def text_scanner(coins: list[str], data: dict, lang: str = "ru") -> str:
+    """⚡ SCANNER — топ возможностей рынка."""
+    lines = [
+        "<b>⚡ ZENDER SCANNER</b>",
+        "",
+    ]
+    _title = "Топ возможностей рынка сейчас" if lang == "ru" else "Top market opportunities now"
+    lines.append(f"<i>{_title}</i>")
+    lines.append("")
+
+    # Рассчитываем давление для каждой монеты
+    scored = []
+    for coin in coins:
+        d = data.get(coin, {})
+        if not d.get("price"):
+            continue
+        pressure = _calc_coin_pressure(d)
+        pressure["coin"] = coin
+        pressure["price"] = d.get("price", "—")
+        pressure["change"] = d.get("change", "—")
+        pressure["ai_score"] = d.get("ai_score", "—")
+        scored.append(pressure)
+
+    # Сортируем по силе сигнала (не нейтральные первыми)
+    scored.sort(key=lambda x: (-1 if x["signal_type"] in ("squeeze", "dump_risk", "pre_move") else 0, -x["score"]))
+
+    # Показываем топ монет (не нейтральные)
+    shown = 0
+    for p in scored:
+        if shown >= 10:
+            break
+        coin = p["coin"]
+        pct = max(p["bull_pct"], p["bear_pct"])
+        sig_label = _signal_type_label(p["signal_type"], lang)
+        reason = p["reason_ru"] if lang == "ru" else p["reason_en"]
+
+        lines.append(f"{p['signal_icon']} <b>{coin}</b>  {p['price']}  {p['change']}")
+        lines.append(f"   {sig_label}  <b>{pct}%</b>  →  {reason}")
+        lines.append("")
+        shown += 1
+
+    if not shown:
+        _no = "Нет активных сигналов" if lang == "ru" else "No active signals"
+        lines.append(_no)
+
+    # Fear & Greed
+    btc = data.get("BTC", {})
+    fg = btc.get("fear_greed", "")
+    fg_label = btc.get("fear_greed_label", "")
+    if fg:
+        lines.append(f"😐 {fg_label} ({fg}/100)")
+
+    lines.append("")
+    _tap = "Нажми монету для анализа ⬇" if lang == "ru" else "Tap a coin for analysis ⬇"
+    lines.append(_tap)
+
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DANGER CENTER — оценка рисков по рынку
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _calc_danger_scores(data: dict) -> dict:
+    """Рассчитывает Danger Score для BTC (и рынка в целом).
+    Returns: dump_risk, squeeze_risk, volatility_risk, total_danger, drivers_ru, drivers_en."""
+
+    btc = data.get("BTC", {})
+    dump_score = 0
+    squeeze_score = 0
+    vol_score = 0
+    dump_drivers_ru = []
+    dump_drivers_en = []
+    squeeze_drivers_ru = []
+    squeeze_drivers_en = []
+    vol_drivers_ru = []
+    vol_drivers_en = []
+
+    # === DUMP RISK ===
+    # 1. Whale inflows
+    if btc.get("whale_direction") == "bearish":
+        dump_score += 20
+        dump_drivers_ru.append("киты заводят на биржи")
+        dump_drivers_en.append("whale inflows to exchanges")
+
+    # 2. Longs crowded (funding high)
+    try:
+        _fr = float(str(btc.get("funding_rate", "0")).replace("%", "").replace("+", ""))
+        if _fr > 0.03:
+            dump_score += 20
+            dump_drivers_ru.append("лонги сильно перегружены")
+            dump_drivers_en.append("longs heavily crowded")
+        elif _fr > 0.01:
+            dump_score += 10
+            dump_drivers_ru.append("лонги платят")
+            dump_drivers_en.append("longs paying")
+    except (ValueError, TypeError):
+        pass
+
+    # 3. CVD negative
+    try:
+        _cv = float(str(btc.get("cvd_value", "0")))
+        if _cv < -2.0:
+            dump_score += 15
+            dump_drivers_ru.append("CVD отрицательный")
+            dump_drivers_en.append("CVD negative")
+        elif _cv < -0.5:
+            dump_score += 8
+    except (ValueError, TypeError):
+        pass
+
+    # 4. OBI asks stronger
+    try:
+        _obi = float(str(btc.get("obi_value", "0")))
+        if _obi < -0.15:
+            dump_score += 12
+            dump_drivers_ru.append("стена продаж давит")
+            dump_drivers_en.append("sell wall pressure")
+    except (ValueError, TypeError):
+        pass
+
+    # 5. Crowd in longs (Bitget)
+    try:
+        _bg = float(str(btc.get("bitget_long_acc", "50")).replace("%", ""))
+        if _bg > 70:
+            dump_score += 15
+            dump_drivers_ru.append(f"толпа в лонгах {_bg:.0f}%")
+            dump_drivers_en.append(f"crowd long {_bg:.0f}%")
+    except (ValueError, TypeError):
+        pass
+
+    # 6. Fear greed extreme greed
+    try:
+        _fg = int(btc.get("fear_greed", "50"))
+        if _fg > 75:
+            dump_score += 10
+            dump_drivers_ru.append("жадность на рынке")
+            dump_drivers_en.append("market greed")
+    except (ValueError, TypeError):
+        pass
+
+    # === SQUEEZE RISK (short squeeze up) ===
+    try:
+        _fr = float(str(btc.get("funding_rate", "0")).replace("%", "").replace("+", ""))
+        if _fr < -0.02:
+            squeeze_score += 25
+            squeeze_drivers_ru.append("фандинг сильно отрицательный")
+            squeeze_drivers_en.append("deeply negative funding")
+        elif _fr < -0.005:
+            squeeze_score += 12
+            squeeze_drivers_ru.append("шорты платят")
+            squeeze_drivers_en.append("shorts paying")
+    except (ValueError, TypeError):
+        pass
+
+    try:
+        _cv = float(str(btc.get("cvd_value", "0")))
+        if _cv > 1.0:
+            squeeze_score += 15
+            squeeze_drivers_ru.append("покупатели давят (CVD+)")
+            squeeze_drivers_en.append("buyers pressing (CVD+)")
+    except (ValueError, TypeError):
+        pass
+
+    try:
+        _bg = float(str(btc.get("bitget_long_acc", "50")).replace("%", ""))
+        if _bg < 35:
+            squeeze_score += 20
+            squeeze_drivers_ru.append(f"шортов много ({100 - _bg:.0f}%)")
+            squeeze_drivers_en.append(f"shorts crowded ({100 - _bg:.0f}%)")
+    except (ValueError, TypeError):
+        pass
+
+    try:
+        _obi = float(str(btc.get("obi_value", "0")))
+        if _obi > 0.15:
+            squeeze_score += 12
+            squeeze_drivers_ru.append("стена покупок сильная")
+            squeeze_drivers_en.append("strong bid wall")
+    except (ValueError, TypeError):
+        pass
+
+    try:
+        _fg = int(btc.get("fear_greed", "50"))
+        if _fg < 25:
+            squeeze_score += 15
+            squeeze_drivers_ru.append("страх на рынке")
+            squeeze_drivers_en.append("market fear")
+    except (ValueError, TypeError):
+        pass
+
+    # === VOLATILITY EXPANSION ===
+    try:
+        _price_chg = abs(float(str(btc.get("change", "0")).replace("%", "").replace("+", "").replace("−", "-").replace("–", "-")))
+        _oi_chg = abs(float(str(btc.get("oi_change", "0")).replace("%", "").replace("+", "")))
+
+        if _oi_chg > 3.0 and _price_chg < 1.5:
+            vol_score += 25
+            vol_drivers_ru.append(f"OI spike +{_oi_chg:.1f}% при плоской цене")
+            vol_drivers_en.append(f"OI spike +{_oi_chg:.1f}% with flat price")
+
+        if _price_chg > 4:
+            vol_score += 20
+            vol_drivers_ru.append(f"резкое движение {_price_chg:.1f}%")
+            vol_drivers_en.append(f"sharp move {_price_chg:.1f}%")
+    except (ValueError, TypeError):
+        pass
+
+    try:
+        _iv = float(str(btc.get("options_iv", "0")).replace("%", ""))
+        if _iv > 70:
+            vol_score += 20
+            vol_drivers_ru.append(f"IV высокая: {_iv:.0f}%")
+            vol_drivers_en.append(f"high IV: {_iv:.0f}%")
+        elif _iv > 50:
+            vol_score += 10
+    except (ValueError, TypeError):
+        pass
+
+    # Считаем агрессивные сделки через рыночные ликвидации
+    try:
+        _ml = float(str(btc.get("mkt_liq_long", "0")).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6").replace(" млрд", "e9").replace("млрд", "e9"))
+        _ms = float(str(btc.get("mkt_liq_short", "0")).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6").replace(" млрд", "e9").replace("млрд", "e9"))
+        if _ml + _ms > 5_000_000:
+            vol_score += 15
+            vol_drivers_ru.append("крупные ликвидации по рынку")
+            vol_drivers_en.append("large market liquidations")
+    except (ValueError, TypeError):
+        pass
+
+    # Ограничиваем до 100
+    dump_score = min(100, dump_score)
+    squeeze_score = min(100, squeeze_score)
+    vol_score = min(100, vol_score)
+    total = max(dump_score, squeeze_score, vol_score)
+
+    return {
+        "dump_risk": dump_score,
+        "squeeze_risk": squeeze_score,
+        "volatility_risk": vol_score,
+        "total_danger": total,
+        "dump_drivers_ru": dump_drivers_ru,
+        "dump_drivers_en": dump_drivers_en,
+        "squeeze_drivers_ru": squeeze_drivers_ru,
+        "squeeze_drivers_en": squeeze_drivers_en,
+        "vol_drivers_ru": vol_drivers_ru,
+        "vol_drivers_en": vol_drivers_en,
+    }
+
+
+def _danger_bar(score: int) -> str:
+    """Визуальный бар для danger score."""
+    filled = round(score / 10)
+    return "█" * filled + "░" * (10 - filled)
+
+
+def _danger_level(score: int, lang: str) -> str:
+    if score >= 70:
+        return "🔴 HIGH" if lang == "en" else "🔴 ВЫСОКИЙ"
+    elif score >= 45:
+        return "🟠 MEDIUM" if lang == "en" else "🟠 СРЕДНИЙ"
+    else:
+        return "🟢 LOW" if lang == "en" else "🟢 НИЗКИЙ"
+
+
+def text_danger_center(data: dict, lang: str = "ru") -> str:
+    """🚨 DANGER CENTER — анализ рисков по рынку."""
+    danger = _calc_danger_scores(data)
+    lines = [
+        "<b>🚨 ZENDER DANGER CENTER</b>",
+        "",
+    ]
+
+    btc = data.get("BTC", {})
+    btc_price = btc.get("price", "—")
+    btc_chg = btc.get("change", "—")
+    lines.append(f"BTC {btc_price}  {btc_chg}")
+    lines.append("")
+
+    total = danger["total_danger"]
+    _total_label = "DANGER LEVEL" if lang == "en" else "УРОВЕНЬ ОПАСНОСТИ"
+    lines.append(f"<b>{_total_label}: {total}%  {_danger_level(total, lang)}</b>")
+    lines.append(f"<code>{_danger_bar(total)}</code>")
+    lines.append("")
+
+    # DUMP RISK
+    ds = danger["dump_risk"]
+    lines.append(f"📉 <b>Dump Risk: {ds}%</b>  {_danger_level(ds, lang)}")
+    lines.append(f"<code>{_danger_bar(ds)}</code>")
+    drivers = danger["dump_drivers_ru"] if lang == "ru" else danger["dump_drivers_en"]
+    if drivers:
+        for dr in drivers[:4]:
+            lines.append(f"  • {dr}")
+    lines.append("")
+
+    # SQUEEZE RISK
+    ss = danger["squeeze_risk"]
+    lines.append(f"🧨 <b>Squeeze Risk: {ss}%</b>  {_danger_level(ss, lang)}")
+    lines.append(f"<code>{_danger_bar(ss)}</code>")
+    drivers = danger["squeeze_drivers_ru"] if lang == "ru" else danger["squeeze_drivers_en"]
+    if drivers:
+        for dr in drivers[:4]:
+            lines.append(f"  • {dr}")
+    lines.append("")
+
+    # VOLATILITY EXPANSION
+    vs = danger["volatility_risk"]
+    _vol_label = "Volatility" if lang == "en" else "Волатильность"
+    lines.append(f"⚡ <b>{_vol_label}: {vs}%</b>  {_danger_level(vs, lang)}")
+    lines.append(f"<code>{_danger_bar(vs)}</code>")
+    drivers = danger["vol_drivers_ru"] if lang == "ru" else danger["vol_drivers_en"]
+    if drivers:
+        for dr in drivers[:4]:
+            lines.append(f"  • {dr}")
+    lines.append("")
+
+    # What to avoid
+    if total >= 50:
+        lines.append("")
+        _avoid_title = "⚠️ <b>ЧТО ИЗБЕГАТЬ:</b>" if lang == "ru" else "⚠️ <b>WHAT TO AVOID:</b>"
+        lines.append(_avoid_title)
+        if ds >= 50:
+            if lang == "ru":
+                lines.append("  • агрессивные лонги без стопа")
+                lines.append("  • усреднение вниз")
+            else:
+                lines.append("  • aggressive longs without stop")
+                lines.append("  • averaging down")
+        if ss >= 50:
+            if lang == "ru":
+                lines.append("  • новые шорты под сопротивлением")
+                lines.append("  • вход против squeeze")
+            else:
+                lines.append("  • new shorts near resistance")
+                lines.append("  • fighting the squeeze")
+        if vs >= 50:
+            if lang == "ru":
+                lines.append("  • крупные позиции с высоким плечом")
+            else:
+                lines.append("  • large leveraged positions")
+
+    # Per-coin danger
+    lines.append("")
+    _per_coin = "── МОНЕТЫ ──" if lang == "ru" else "── COINS ──"
+    lines.append(_per_coin)
+    for coin in ["BTC", "ETH", "SOL", "XRP", "DOGE"]:
+        d = data.get(coin, {})
+        if not d.get("price"):
+            continue
+        p = _calc_coin_pressure(d)
+        if p["signal_type"] in ("squeeze", "dump_risk"):
+            lines.append(f"{p['signal_icon']} <b>{coin}</b>: {_signal_type_label(p['signal_type'], lang)} {max(p['bull_pct'], p['bear_pct'])}%")
+        elif p["score"] > 15:
+            lines.append(f"{p['signal_icon']} <b>{coin}</b>: {_signal_type_label(p['signal_type'], lang)} {max(p['bull_pct'], p['bear_pct'])}%")
+
+    return "\n".join(lines)
+
+
+def kb_scanner(page: int = 0, lang: str = "ru"):
+    """Кнопки под сканером."""
+    rows = _coin_page_buttons(page)
+    nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
+    if nav:
+        rows.append(nav)
+    rows.append([
+        InlineKeyboardButton(text=t("btn_refresh", lang), callback_data="scanner"),
+        InlineKeyboardButton(text=t("btn_danger", lang), callback_data="danger"),
+    ])
+    rows.append([
+        InlineKeyboardButton(text=t("btn_radar", lang), callback_data="radar"),
+        InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_danger(lang: str = "ru"):
+    """Кнопки под Danger Center."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t("btn_refresh", lang), callback_data="danger"),
+            InlineKeyboardButton(text=t("btn_scanner", lang), callback_data="scanner"),
+        ],
+        [
+            InlineKeyboardButton(text=t("btn_radar", lang), callback_data="radar"),
+            InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
+        ],
+    ])
 
 
 def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str = "basic") -> str:
@@ -2180,45 +2751,92 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                     _pm_dir = "направление неясно" if lang == "ru" else "direction unclear"
                 lines.append(f"  ⚡ {_pm_dir}")
 
-    # ── MARKET REGIME (PRO) ──
+    # ── MARKET REGIME (PRO) — Trend + Volatility + Liquidity ──
     if is_pro:
         try:
             _rsi = float(d.get("rsi", "50"))
             _price_chg_regime = abs(float(str(change).replace("%", "").replace("+", "").replace("−", "-").replace("–", "-")))
 
-            # Определяем режим рынка
-            if _rsi > 65 or _rsi < 35:
-                if _price_chg_regime > 3:
-                    _regime = "TRENDING + HIGH VOL"
-                    _regime_icon = "🔥"
-                    _regime_hint_ru = "сильный тренд с высокой волатильностью"
-                    _regime_hint_en = "strong trend with high volatility"
-                else:
-                    _regime = "TRENDING"
-                    _regime_icon = "📈" if _rsi > 65 else "📉"
-                    _regime_hint_ru = "трендовый рынок"
-                    _regime_hint_en = "trending market"
-            elif _price_chg_regime > 4:
-                _regime = "HIGH VOLATILITY"
-                _regime_icon = "⚡"
-                _regime_hint_ru = "высокая волатильность — осторожно"
-                _regime_hint_en = "high volatility — caution"
-            elif _price_chg_regime < 0.5 and 45 < _rsi < 55:
-                _regime = "RANGE / SIDEWAYS"
-                _regime_icon = "😴"
-                _regime_hint_ru = "боковик — рынок спит"
-                _regime_hint_en = "sideways — market sleeping"
+            # TREND
+            if _rsi > 65:
+                _trend = "BULLISH"
+                _trend_icon = "📈"
+            elif _rsi < 35:
+                _trend = "BEARISH"
+                _trend_icon = "📉"
+            elif _rsi > 55:
+                _trend = "MILDLY BULLISH"
+                _trend_icon = "↗️"
+            elif _rsi < 45:
+                _trend = "MILDLY BEARISH"
+                _trend_icon = "↘️"
             else:
-                _regime = "NORMAL"
-                _regime_icon = "🟢"
-                _regime_hint_ru = "нормальный режим"
-                _regime_hint_en = "normal mode"
+                _trend = "SIDEWAYS"
+                _trend_icon = "➡️"
+
+            # VOLATILITY
+            if _price_chg_regime > 5:
+                _vol = "EXTREME"
+                _vol_icon = "🔥"
+            elif _price_chg_regime > 3:
+                _vol = "HIGH"
+                _vol_icon = "⚡"
+            elif _price_chg_regime > 1:
+                _vol = "MEDIUM"
+                _vol_icon = "📊"
+            else:
+                _vol = "LOW"
+                _vol_icon = "😴"
+
+            # LIQUIDITY (из OBI — стакан)
+            try:
+                _obi_v = float(str(d.get("obi_value", "0")))
+                if _obi_v > 0.2:
+                    _liq = "STRONG BIDS"
+                    _liq_icon = "🟢"
+                elif _obi_v < -0.2:
+                    _liq = "STRONG ASKS"
+                    _liq_icon = "🔴"
+                else:
+                    _liq = "BALANCED"
+                    _liq_icon = "⚖️"
+            except (ValueError, TypeError):
+                _liq = "NORMAL"
+                _liq_icon = "⚖️"
 
             lines.append("")
             _mr_title = "── MARKET REGIME (PRO) ──" if lang == "ru" else "── MARKET REGIME (PRO) ──"
             lines.append(_mr_title)
-            _hint = _regime_hint_ru if lang == "ru" else _regime_hint_en
-            lines.append(f"{_regime_icon} <b>{_regime}</b> — {_hint}")
+            lines.append(f"{_trend_icon} Trend: <b>{_trend}</b>")
+            lines.append(f"{_vol_icon} Volatility: <b>{_vol}</b>")
+            lines.append(f"{_liq_icon} Liquidity: <b>{_liq}</b>")
+        except (ValueError, TypeError):
+            pass
+
+    # ── FUNDING HEAT (PRO) ──
+    if is_pro:
+        try:
+            _fr_heat = float(str(d.get("funding_rate", "0")).replace("%", "").replace("+", ""))
+            # Funding percentile approximation: |FR| < 0.01 = normal, 0.01-0.03 = elevated, >0.03 = extreme
+            if abs(_fr_heat) > 0.005:
+                _fr_pct = min(99, int(50 + abs(_fr_heat) * 1500))  # rough percentile
+                lines.append("")
+                _fh_title = "── FUNDING HEAT (PRO) ──" if lang == "ru" else "── FUNDING HEAT (PRO) ──"
+                lines.append(_fh_title)
+                _fh_bar = "█" * round(_fr_pct / 10) + "░" * (10 - round(_fr_pct / 10))
+                lines.append(f"<code>HEAT {_fh_bar} {_fr_pct}%</code>")
+                if _fr_heat > 0.03:
+                    _fh_hint = "рынок перегружен лонгами" if lang == "ru" else "market overleveraged long"
+                elif _fr_heat > 0.01:
+                    _fh_hint = "лонги платят — умеренная нагрузка" if lang == "ru" else "longs paying — moderate load"
+                elif _fr_heat < -0.02:
+                    _fh_hint = "рынок перегружен шортами" if lang == "ru" else "market overleveraged short"
+                elif _fr_heat < -0.005:
+                    _fh_hint = "шорты платят — возможен squeeze" if lang == "ru" else "shorts paying — squeeze possible"
+                else:
+                    _fh_hint = ""
+                if _fh_hint:
+                    lines.append(f"→ {_fh_hint}")
         except (ValueError, TypeError):
             pass
 
@@ -2463,6 +3081,32 @@ async def cmd_summary(message: Message):
     )
 
 
+@dp.message(Command("scanner"))
+async def cmd_scanner(message: Message):
+    lang = await get_user_lang(message.from_user.id)
+    coins = COINS
+    data = await db.get_market_data(coins)
+    await message.answer(
+        text_scanner(coins, data, lang),
+        parse_mode=ParseMode.HTML,
+        link_preview_options=NO_PREVIEW,
+        reply_markup=kb_scanner(page=0, lang=lang)
+    )
+
+
+@dp.message(Command("danger"))
+async def cmd_danger(message: Message):
+    lang = await get_user_lang(message.from_user.id)
+    coins = COINS
+    data = await db.get_market_data(coins)
+    await message.answer(
+        text_danger_center(data, lang),
+        parse_mode=ParseMode.HTML,
+        link_preview_options=NO_PREVIEW,
+        reply_markup=kb_danger(lang=lang)
+    )
+
+
 @dp.message(Command("settings"))
 async def cmd_settings(message: Message):
     user_id = message.from_user.id
@@ -2555,6 +3199,34 @@ async def cb_refresh(call: CallbackQuery):
         reply_markup=kb_radar(page=0, lang=lang)
     )
     await call.answer(t("refreshed", lang))
+
+
+@dp.callback_query(F.data == "scanner")
+async def cb_scanner(call: CallbackQuery):
+    lang = await get_user_lang(call.from_user.id)
+    coins = COINS
+    data = await db.get_market_data(coins)
+    await call.message.edit_text(
+        text_scanner(coins, data, lang),
+        parse_mode=ParseMode.HTML,
+        link_preview_options=NO_PREVIEW,
+        reply_markup=kb_scanner(page=0, lang=lang)
+    )
+    await call.answer()
+
+
+@dp.callback_query(F.data == "danger")
+async def cb_danger(call: CallbackQuery):
+    lang = await get_user_lang(call.from_user.id)
+    coins = COINS
+    data = await db.get_market_data(coins)
+    await call.message.edit_text(
+        text_danger_center(data, lang),
+        parse_mode=ParseMode.HTML,
+        link_preview_options=NO_PREVIEW,
+        reply_markup=kb_danger(lang=lang)
+    )
+    await call.answer()
 
 
 @dp.callback_query(F.data.startswith("page_"))
