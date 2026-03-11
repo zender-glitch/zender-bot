@@ -2445,7 +2445,7 @@ async def cmd_start(message: Message):
     await message.answer(
         t("welcome", detected_lang),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_main(detected_lang),
     )
 
@@ -2458,7 +2458,7 @@ async def cmd_summary(message: Message):
     await message.answer(
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_radar(page=0, lang=lang)
     )
 
@@ -2479,7 +2479,7 @@ async def cmd_settings(message: Message):
         f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
         f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_settings(alerts, lang)
     )
 
@@ -2501,7 +2501,7 @@ async def cmd_status(message: Message):
         f"{t('status_coins', lang)}: <b>{len(coins)}</b>\n"
         f"{t('status_interval', lang)}: <b>{interval} мин</b>",
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_main(lang)
     )
 
@@ -2523,7 +2523,7 @@ async def cb_summary(call: CallbackQuery):
     await call.message.edit_text(
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_radar(page=0, lang=lang)
     )
     await call.answer()
@@ -2537,7 +2537,7 @@ async def cb_radar(call: CallbackQuery):
     await call.message.edit_text(
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_radar(page=0, lang=lang)
     )
     await call.answer()
@@ -2551,7 +2551,7 @@ async def cb_refresh(call: CallbackQuery):
     await call.message.edit_text(
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_radar(page=0, lang=lang)
     )
     await call.answer(t("refreshed", lang))
@@ -2567,7 +2567,7 @@ async def cb_page(call: CallbackQuery):
     await call.message.edit_text(
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_radar(page=page, lang=lang)
     )
     await call.answer()
@@ -2590,7 +2590,7 @@ async def cb_coin(call: CallbackQuery):
     await call.message.edit_text(
         text_coin_analysis(coin, data, lang, view_mode=view_mode),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode)
     )
     await call.answer()
@@ -2632,7 +2632,7 @@ async def cb_viewmode(call: CallbackQuery):
     await call.message.edit_text(
         text_coin_analysis(coin, data, lang, view_mode=new_mode),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=new_mode)
     )
     await call.answer()
@@ -2672,7 +2672,7 @@ async def cb_options(call: CallbackQuery):
     await call.message.edit_text(
         text_options_detail(coin, data, lang, ai_text),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_options(coin, lang)
     )
     await call.answer()
@@ -2694,7 +2694,7 @@ async def cb_settings(call: CallbackQuery):
         f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
         f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_settings(alerts, lang)
     )
     await call.answer()
@@ -2717,7 +2717,7 @@ async def cb_interval(call: CallbackQuery):
         f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
         f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_settings(alerts, lang)
     )
     await call.answer(t("interval_set", lang, interval=interval))
@@ -2740,7 +2740,7 @@ async def cb_toggle_alerts(call: CallbackQuery):
         f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
         f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_settings(enable, lang)
     )
     status_text = t("alerts_on_short", lang) if enable else t("alerts_off_short", lang)
@@ -2768,7 +2768,7 @@ async def cb_toggle_lang(call: CallbackQuery):
         f"{t('settings_alerts', new_lang)}: <b>{alert_status}</b>\n\n"
         f"{t('settings_choose_interval', new_lang)}",
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_settings(alerts, new_lang)
     )
     await call.answer(f"🌐 {'English' if new_lang == 'en' else 'Русский'}")
@@ -2784,7 +2784,7 @@ async def cb_subscription(call: CallbackQuery):
         f"{t('sub_pro', lang)}\n"
         f"{t('sub_pro_plus', lang)}",
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_subscription(lang)
     )
     await call.answer()
@@ -2812,7 +2812,7 @@ async def cb_help(call: CallbackQuery):
     await call.message.edit_text(
         t("help", lang),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_main")]
         ])
@@ -2826,7 +2826,7 @@ async def cb_back_main(call: CallbackQuery):
     await call.message.edit_text(
         t("welcome", lang),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_main(lang)
     )
     await call.answer()
@@ -2880,7 +2880,7 @@ async def cb_faq(call: CallbackQuery):
     await call.message.edit_text(
         t("faq_title", lang),
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_faq(lang),
     )
     await call.answer()
@@ -2896,7 +2896,7 @@ async def cb_faq_item(call: CallbackQuery):
     await call.message.edit_text(
         text,
         parse_mode=ParseMode.HTML,
-        link_preview=NO_PREVIEW,
+        link_preview_options=NO_PREVIEW,
         reply_markup=kb_faq_back(lang),
     )
     await call.answer()
@@ -2929,7 +2929,7 @@ async def send_alerts():
                     chat_id=tid,
                     text=text,
                     parse_mode=ParseMode.HTML,
-                    link_preview=NO_PREVIEW,
+                    link_preview_options=NO_PREVIEW,
                     reply_markup=kb_radar(page=0, lang=lang)
                 )
                 await db.update_last_alert(tid)
