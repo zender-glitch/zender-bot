@@ -939,8 +939,8 @@ def detect_language(language_code: str | None) -> str:
 COINS_PER_PAGE = 10  # 2 ряда по 5 монет на странице
 
 
-def _coin_page_buttons(page: int = 0, prefix: str = "coin_") -> list:
-    """Кнопки монет для текущей страницы (2 ряда по 5)"""
+def _coin_page_buttons(page: int = 0, prefix: str = "coin_", data: dict = None) -> list:
+    """Кнопки монет для текущей страницы (2 ряда по 5)."""
     start = page * COINS_PER_PAGE
     end = start + COINS_PER_PAGE
     page_coins = COINS[start:end]
@@ -995,22 +995,26 @@ def kb_main(lang: str = "ru"):
     ])
 
 
-def kb_radar(page: int = 0, lang: str = "ru"):
+def kb_radar(page: int = 0, lang: str = "ru", data: dict = None):
     """Кнопки под радаром: монеты + пагинация + обновить + настройки"""
-    rows = _coin_page_buttons(page)
+    rows = _coin_page_buttons(page, data=data)
     nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
     if nav:
         rows.append(nav)
     rows.append([
-        InlineKeyboardButton(text=t("btn_refresh", lang), callback_data="radar"),
+        InlineKeyboardButton(text="📡 Радар", callback_data="radar"),
+        InlineKeyboardButton(text="🔎 Сканер", callback_data="scanner"),
+        InlineKeyboardButton(text="🚨 Danger", callback_data="danger"),
+    ])
+    rows.append([
         InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def kb_coin_detail(coin: str, page: int = 0, lang: str = "ru", view_mode: str = "basic"):
+def kb_coin_detail(coin: str, page: int = 0, lang: str = "ru", view_mode: str = "basic", data: dict = None):
     """Кнопки под анализом монеты"""
-    rows = _coin_page_buttons(page)
+    rows = _coin_page_buttons(page, data=data)
     nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
     if nav:
         rows.append(nav)
@@ -1042,9 +1046,9 @@ def kb_coin_detail(coin: str, page: int = 0, lang: str = "ru", view_mode: str = 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def kb_coin_buttons(page: int = 0, lang: str = "ru"):
+def kb_coin_buttons(page: int = 0, lang: str = "ru", data: dict = None):
     """Кнопки монет + обновить + радар + настройки"""
-    rows = _coin_page_buttons(page)
+    rows = _coin_page_buttons(page, data=data)
     nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
     if nav:
         rows.append(nav)
@@ -1160,19 +1164,22 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
         price  = d.get("price",  "—")
         change = d.get("change", "—")
         rec    = d.get("recommendation", "")
-        ch_icon = _change_icon(change)
 
-        # Короткий сигнал: ▲ ▼ ●
+        # Сигнал: 🟢BUY 🔴SELL ⚪HOLD
         r = str(rec).lower()
         if "покупать" in r or "buy" in r:
-            sig = "▲"
+            sig = "🟢BUY"
         elif "продавать" in r or "sell" in r:
-            sig = "▼"
+            sig = "🔴SELL"
         else:
-            sig = "·"
+            sig = "⚪HOLD"
 
-        # Одна короткая строка: 🔴 BTC $69,577 -1.80%
-        lines.append(f"{ch_icon} <b>{coin}</b> {price} {change}")
+        # Моноширинная строка для выравнивания кружков
+        # BTC   $69,577  -1.80%  🟢BUY
+        _coin_s = f"{coin:<5}"
+        _price_s = f"{price:>10}"
+        _chg_s = f"{change:>8}"
+        lines.append(f"<code>{_coin_s}{_price_s} {_chg_s}</code> {sig}")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
@@ -1738,18 +1745,18 @@ def text_danger_center(data: dict, lang: str = "ru") -> str:
     return "\n".join(lines)
 
 
-def kb_scanner(page: int = 0, lang: str = "ru"):
+def kb_scanner(page: int = 0, lang: str = "ru", data: dict = None):
     """Кнопки под сканером."""
-    rows = _coin_page_buttons(page)
+    rows = _coin_page_buttons(page, data=data)
     nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
     if nav:
         rows.append(nav)
     rows.append([
-        InlineKeyboardButton(text=t("btn_refresh", lang), callback_data="scanner"),
-        InlineKeyboardButton(text=t("btn_danger", lang), callback_data="danger"),
+        InlineKeyboardButton(text="📡 Радар", callback_data="radar"),
+        InlineKeyboardButton(text="🔎 Сканер", callback_data="scanner"),
+        InlineKeyboardButton(text="🚨 Danger", callback_data="danger"),
     ])
     rows.append([
-        InlineKeyboardButton(text=t("btn_radar", lang), callback_data="radar"),
         InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1759,11 +1766,11 @@ def kb_danger(lang: str = "ru"):
     """Кнопки под Danger Center."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=t("btn_refresh", lang), callback_data="danger"),
-            InlineKeyboardButton(text=t("btn_scanner", lang), callback_data="scanner"),
+            InlineKeyboardButton(text="📡 Радар", callback_data="radar"),
+            InlineKeyboardButton(text="🔎 Сканер", callback_data="scanner"),
+            InlineKeyboardButton(text="🚨 Danger", callback_data="danger"),
         ],
         [
-            InlineKeyboardButton(text=t("btn_radar", lang), callback_data="radar"),
             InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
         ],
     ])
@@ -1846,15 +1853,13 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         if strength_label:
             sig_part += f" ({strength_label})"
 
-    # Собираем одну строку: AI Score · Сигнал
-    card_parts = []
-    if score_part:
-        card_parts.append(score_part)
-    if sig_part:
-        card_parts.append(sig_part)
-    if card_parts:
+    # AI Score и Сигнал — каждый на отдельной строке
+    if score_part or sig_part:
         lines.append("")
-        lines.append(" · ".join(card_parts))
+    if score_part:
+        lines.append(score_part)
+    if sig_part:
+        lines.append(sig_part)
 
     # PRO: Confidence bar (уверенность сигнала)
     if is_pro:
@@ -3077,7 +3082,7 @@ async def cmd_summary(message: Message):
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
-        reply_markup=kb_radar(page=0, lang=lang)
+        reply_markup=kb_radar(page=0, lang=lang, data=data)
     )
 
 
@@ -3090,7 +3095,7 @@ async def cmd_scanner(message: Message):
         text_scanner(coins, data, lang),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
-        reply_markup=kb_scanner(page=0, lang=lang)
+        reply_markup=kb_scanner(page=0, lang=lang, data=data)
     )
 
 
@@ -3168,7 +3173,7 @@ async def cb_summary(call: CallbackQuery):
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
-        reply_markup=kb_radar(page=0, lang=lang)
+        reply_markup=kb_radar(page=0, lang=lang, data=data)
     )
     await call.answer()
 
@@ -3182,7 +3187,7 @@ async def cb_radar(call: CallbackQuery):
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
-        reply_markup=kb_radar(page=0, lang=lang)
+        reply_markup=kb_radar(page=0, lang=lang, data=data)
     )
     await call.answer()
 
@@ -3196,7 +3201,7 @@ async def cb_refresh(call: CallbackQuery):
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
-        reply_markup=kb_radar(page=0, lang=lang)
+        reply_markup=kb_radar(page=0, lang=lang, data=data)
     )
     await call.answer(t("refreshed", lang))
 
@@ -3210,7 +3215,7 @@ async def cb_scanner(call: CallbackQuery):
         text_scanner(coins, data, lang),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
-        reply_markup=kb_scanner(page=0, lang=lang)
+        reply_markup=kb_scanner(page=0, lang=lang, data=data)
     )
     await call.answer()
 
@@ -3240,7 +3245,7 @@ async def cb_page(call: CallbackQuery):
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
-        reply_markup=kb_radar(page=page, lang=lang)
+        reply_markup=kb_radar(page=page, lang=lang, data=data)
     )
     await call.answer()
 
@@ -3263,7 +3268,7 @@ async def cb_coin(call: CallbackQuery):
         text_coin_analysis(coin, data, lang, view_mode=view_mode),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
-        reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode)
+        reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode, data=data)
     )
     await call.answer()
 
@@ -3305,7 +3310,7 @@ async def cb_viewmode(call: CallbackQuery):
         text_coin_analysis(coin, data, lang, view_mode=new_mode),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
-        reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=new_mode)
+        reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=new_mode, data=data)
     )
     await call.answer()
 
@@ -3602,7 +3607,7 @@ async def send_alerts():
                     text=text,
                     parse_mode=ParseMode.HTML,
                     link_preview_options=NO_PREVIEW,
-                    reply_markup=kb_radar(page=0, lang=lang)
+                    reply_markup=kb_radar(page=0, lang=lang, data=data)
                 )
                 await db.update_last_alert(tid)
                 sent += 1
