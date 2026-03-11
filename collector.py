@@ -23,6 +23,11 @@ except (ImportError, AttributeError):
     ANTHROPIC_KEY = None
     HAS_ANTHROPIC = False
 
+# LLM вызывается раз в 15 мин (экономия ~$120/мес). Данные обновляются каждые 5 мин.
+# TODO: переключить на 5 мин когда пойдут платные подписки
+LLM_INTERVAL_SEC = 15 * 60  # 15 минут
+_last_llm_run = 0.0  # timestamp последнего LLM прогона
+
 # Bitget API v2 (бесплатно, без ключа, работает из US серверов Railway)
 # OKX, Binance, Bybit — НЕ работают из US, убраны
 BITGET_BASE = "https://api.bitget.com"
@@ -3297,7 +3302,15 @@ async def collect_all():
     """
     Собирает данные по всем монетам + LLM-анализ, сохраняет в Supabase.
     """
-    log.info("📡 Начинаем сбор данных...")
+    global _last_llm_run
+    _now = time.time()
+    _run_llm_this_cycle = (_now - _last_llm_run) >= LLM_INTERVAL_SEC
+    if _run_llm_this_cycle:
+        _last_llm_run = _now
+        log.info("📡 Начинаем сбор данных... (+ LLM анализ)")
+    else:
+        _mins_left = int((LLM_INTERVAL_SEC - (_now - _last_llm_run)) / 60)
+        log.info(f"📡 Начинаем сбор данных... (LLM через ~{_mins_left} мин)")
 
     # Обновляем кэш BGeometrics (реальные запросы только если кэш устарел)
     await fetch_bgeometrics_batch()
@@ -3486,8 +3499,10 @@ async def collect_all():
             liq_levels = calculate_liquidation_levels(coin_data)
 
             # LLM-анализ (получает pre-scored pipeline, только формулирует текст)
+            # LLM вызывается раз в LLM_INTERVAL_SEC (15 мин), данные — каждые 5 мин
             llm_data = {}
-            if HAS_ANTHROPIC and coin_data.get("price") and coin_data.get("oi"):
+            _do_llm = HAS_ANTHROPIC and coin_data.get("price") and coin_data.get("oi") and _run_llm_this_cycle
+            if _do_llm:
                 llm_data = await generate_llm_analysis(symbol, coin_data, pipeline)
             else:
                 # Без LLM — используем pipeline данные напрямую
@@ -3609,6 +3624,13 @@ async def collect_all():
                 "sell_zone": llm_data.get("sell_zone", ""),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
+
+            # Если LLM не запускался в этом цикле — не перезаписываем LLM-поля в БД
+            if not _run_llm_this_cycle:
+                for _llm_key in ("llm_text", "what_happening", "recommendation", "strength",
+                                 "entry", "stop", "target", "buy_zone", "sell_zone",
+                                 "horizon", "trap", "trap_display", "funding_conflict"):
+                    record.pop(_llm_key, None)
 
             await db.upsert_market_data(record)
             rec = llm_data.get("recommendation", "—")
