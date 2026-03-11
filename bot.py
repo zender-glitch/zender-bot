@@ -1263,7 +1263,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 ai_lbl = _ai_labels_ru.get(ai_score_label_val, ai_score_label_val)
             else:
                 ai_lbl = ai_score_label_val
-            score_part = f"{sc_icon} <b>{ai_sc}/100</b> {ai_lbl}"
+            _ai_title = "AI-Анализ" if lang == "ru" else "AI Score"
+            score_part = f"{sc_icon} {_ai_title}: <b>{ai_sc}/100</b> {ai_lbl}"
         except (ValueError, TypeError):
             pass
 
@@ -1280,6 +1281,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     if sig_part:
         card_parts.append(sig_part)
     if card_parts:
+        lines.append("")
         lines.append(" · ".join(card_parts))
 
     # Цель + Стоп + Горизонт — ОДНА строка
@@ -1295,84 +1297,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         lines.append("  ".join(levels_parts))
 
     # ══════════════════════════════════════════════════════════════
-    # ПОЛНЫЙ АНАЛИЗ (после карточки)
-    # ══════════════════════════════════════════════════════════════
-
-    # Лейбл режима
-    if is_pro:
-        _mode_label = "📊 PRO" if lang == "ru" else "📊 PRO"
-        lines.append(f"\n<b>{_mode_label}</b>")
-
-    # ── ЧТО ПРОИСХОДИТ ──
-    # В Basic — краткий what_happening, в Pro — полный llm_text
-    llm_text = _clean(d.get("llm_text", ""))
-    if is_pro and llm_text:
-        lines.append("")
-        lines.append(f"<b>🤖 AI-АНАЛИЗ</b>")
-        lines.append(html_lib.escape(llm_text))
-    elif what_happening:
-        lines.append("")
-        lines.append(f"<b>{t('what_happening', lang)}</b>")
-        lines.append(html_lib.escape(what_happening))
-
-    # ── ЛОВУШКА ──
-    if trap:
-        lines.append("")
-        lines.append(f"⚠️ <b>{t('trap', lang)}</b>")
-        lines.append(html_lib.escape(trap))
-
-    # ── MARKET PRESSURE GAUGE (визуальная шкала быки/медведи) ──
-    prob_bull = d.get("prob_bull")
-    prob_bear = d.get("prob_bear")
-    if prob_bull is not None and prob_bear is not None:
-        try:
-            pb = int(float(str(prob_bull)))
-            pr = int(float(str(prob_bear)))
-            if pb != 50 or pr != 50:
-                lines.append("")
-                gauge_title = "ДАВЛЕНИЕ РЫНКА" if lang == "ru" else "MARKET PRESSURE"
-                lines.append(f"<b>📊 {gauge_title}</b>")
-                # Визуальная полоса: 10 блоков
-                bull_blocks = round(pb / 10)
-                bear_blocks = 10 - bull_blocks
-                bar = "█" * bull_blocks + "░" * bear_blocks
-                if pb >= pr:
-                    lines.append(f"<code>🐂 {bar} {pb}%</code>")
-                    if lang == "ru":
-                        hint = "быки доминируют" if pb >= 65 else "лёгкое преимущество быков"
-                    else:
-                        hint = "bulls dominate" if pb >= 65 else "slight bull advantage"
-                else:
-                    lines.append(f"<code>🐻 {bar} {pr}%</code>")
-                    if lang == "ru":
-                        hint = "медведи доминируют" if pr >= 65 else "лёгкое преимущество медведей"
-                    else:
-                        hint = "bears dominate" if pr >= 65 else "slight bear advantage"
-                lines.append(f"<i>{hint}</i>")
-        except (ValueError, TypeError):
-            pass
-
-    # ── AI SCORE DRIVERS (причины — подробности карточки) ──
-    top_bull = d.get("top_factors_bull", "")
-    top_bear = d.get("top_factors_bear", "")
-    if top_bull or top_bear:
-        lines.append("")
-        drv_title = "ПРИЧИНЫ" if lang == "ru" else "DRIVERS"
-        lines.append(f"<b>🤖 {drv_title}</b>")
-        if top_bull:
-            bull_lbl = "За рост" if lang == "ru" else "Bullish"
-            lines.append(f"  ⬆️ {bull_lbl}: {html_lib.escape(top_bull)}")
-        if top_bear:
-            bear_lbl = "За падение" if lang == "ru" else "Bearish"
-            lines.append(f"  ⬇️ {bear_lbl}: {html_lib.escape(top_bear)}")
-
-    # ── КОНФЛИКТ FUNDING ──
-    funding_conflict = _clean(d.get("funding_conflict", ""))
-    if funding_conflict:
-        lines.append(f"ℹ️ {html_lib.escape(funding_conflict)}")
-
-    # ══════════════════════════════════════════════════════════════
-    # РЫНОЧНЫЕ ДАННЫЕ (Basic: ключевые метрики, Pro: + advanced)
+    # РЫНОЧНЫЕ ДАННЫЕ (сначала все данные)
     # ══════════════════════════════════════════════════════════════
     lines.append("")
     lines.append(t("section_market", lang))
@@ -1532,7 +1457,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     has_netflow = (coin == "BTC" and _has(netflow) and not has_whale_alert)
     has_crowd = _has(bg_long_acc)
 
-    if is_pro and (has_whale_alert or has_netflow or has_crowd):
+    if has_whale_alert or has_netflow or has_crowd:
         lines.append("")
         lines.append(t("whales_vs_crowd", lang))
 
@@ -1577,8 +1502,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             except (ValueError, TypeError):
                 pass
 
-    # ETH Gas (PRO)
-    if is_pro and coin == "ETH" and _has(d.get("eth_gas_avg", "—")):
+    # ETH Gas
+    if coin == "ETH" and _has(d.get("eth_gas_avg", "—")):
         eth_gas = d.get("eth_gas_avg", "—")
         try:
             gas_v = int(float(str(eth_gas)))
@@ -1603,7 +1528,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     has_cvd = _has(cvd_val) and cvd_val != "—"
     has_obi = _has(obi_bid) and obi_bid != "—" and _has(obi_ask) and obi_ask != "—"
 
-    if is_pro and (has_cvd or has_obi):
+    if has_cvd or has_obi:
         lines.append("")
         _of_title = "── ПОТОК ОРДЕРОВ ──" if lang == "ru" else "── ORDER FLOW ──"
         lines.append(_of_title)
@@ -1655,7 +1580,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     # ── LIQUIDITY MAP ──
     liq_lvl_shorts = d.get("liq_level_shorts", "")
     liq_lvl_longs = d.get("liq_level_longs", "")
-    if is_pro and (liq_lvl_shorts or liq_lvl_longs):
+    if liq_lvl_shorts or liq_lvl_longs:
         lines.append("")
         _liq_title = "── КАРТА ЛИКВИДАЦИЙ ──" if lang == "ru" else "── LIQUIDITY MAP ──"
         lines.append(_liq_title)
@@ -1672,7 +1597,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     # ── MARKET STRUCTURE (Spot vs Perp) ──
     spot_vol = d.get("spot_volume", "")
     perp_vol = d.get("perp_volume", "")
-    if is_pro and _has(spot_vol) and _has(perp_vol):
+    if _has(spot_vol) and _has(perp_vol):
         try:
             sv = float(str(spot_vol).replace(",", ""))
             pv = float(str(perp_vol).replace(",", ""))
@@ -1694,14 +1619,12 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         except (ValueError, TypeError):
             pass
 
-    # ── УРОВНИ (Pro only — детализация ликвидаций) ──
-    if is_pro:
-        lines.append("")
-        lines.append(t("section_levels", lang))
-
+    # ── УРОВНИ ──
     liq_up = d.get("liq_up", "—")
     liq_dn = d.get("liq_dn", "—")
-    if is_pro and (_has(liq_up) or _has(liq_dn)):
+    if _has(liq_up) or _has(liq_dn):
+        lines.append("")
+        lines.append(t("section_levels", lang))
         lines.append(f"💥 {t('liq_1h', lang)}")
         if _has(liq_up) and _has(liq_dn):
             try:
@@ -1800,34 +1723,106 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             if nearest_exp:
                 lines.append(nearest_exp)
 
-            # PRO: дополнительные опционные данные inline
-            if is_pro:
-                # IV
-                if _has(iv_val) and iv_val != "—":
-                    try:
-                        iv_f = float(iv_val)
-                        if iv_f < 30:
-                            iv_hint = "тихо" if lang == "ru" else "quiet"
-                        elif iv_f < 60:
-                            iv_hint = "норма" if lang == "ru" else "normal"
-                        elif iv_f < 80:
-                            iv_hint = "повышенная" if lang == "ru" else "elevated"
-                        else:
-                            iv_hint = "шторм" if lang == "ru" else "extreme"
-                        lines.append(f"📈 IV: <b>{iv_f:.0f}%</b> — {iv_hint}")
-                    except (ValueError, TypeError):
-                        pass
-                # OI Calls/Puts
-                if _has(oi_calls) and oi_calls != "—" and _has(oi_puts) and oi_puts != "—":
-                    try:
-                        oi_c = float(oi_calls)
-                        oi_p = float(oi_puts)
-                        total_oi = oi_c + oi_p
-                        if total_oi > 0:
-                            call_pct = round(oi_c / total_oi * 100)
-                            lines.append(f"🟢 Calls: <b>{oi_c/1000:,.0f}K</b> ({call_pct}%) · 🔴 Puts: <b>{oi_p/1000:,.0f}K</b> ({100-call_pct}%)")
-                    except (ValueError, TypeError):
-                        pass
+            # Дополнительные опционные данные inline
+            # IV
+            if _has(iv_val) and iv_val != "—":
+                try:
+                    iv_f = float(iv_val)
+                    if iv_f < 30:
+                        iv_hint = "тихо" if lang == "ru" else "quiet"
+                    elif iv_f < 60:
+                        iv_hint = "норма" if lang == "ru" else "normal"
+                    elif iv_f < 80:
+                        iv_hint = "повышенная" if lang == "ru" else "elevated"
+                    else:
+                        iv_hint = "шторм" if lang == "ru" else "extreme"
+                    lines.append(f"📈 IV: <b>{iv_f:.0f}%</b> — {iv_hint}")
+                except (ValueError, TypeError):
+                    pass
+            # OI Calls/Puts
+            if _has(oi_calls) and oi_calls != "—" and _has(oi_puts) and oi_puts != "—":
+                try:
+                    oi_c = float(oi_calls)
+                    oi_p = float(oi_puts)
+                    total_oi = oi_c + oi_p
+                    if total_oi > 0:
+                        call_pct = round(oi_c / total_oi * 100)
+                        lines.append(f"🟢 Calls: <b>{oi_c/1000:,.0f}K</b> ({call_pct}%) · 🔴 Puts: <b>{oi_p/1000:,.0f}K</b> ({100-call_pct}%)")
+                except (ValueError, TypeError):
+                    pass
+
+    # ══════════════════════════════════════════════════════════════
+    # AI-АНАЛИЗ (внизу после всех данных)
+    # ══════════════════════════════════════════════════════════════
+
+    # ── ПРИЧИНЫ (AI Score Drivers) ──
+    top_bull = d.get("top_factors_bull", "")
+    top_bear = d.get("top_factors_bear", "")
+    if top_bull or top_bear:
+        lines.append("")
+        drv_title = "ПРИЧИНЫ" if lang == "ru" else "DRIVERS"
+        lines.append(f"<b>🤖 {drv_title}</b>")
+        if top_bull:
+            bull_lbl = "За рост" if lang == "ru" else "Bullish"
+            lines.append(f"  ⬆️ {bull_lbl}: {html_lib.escape(top_bull)}")
+        if top_bear:
+            bear_lbl = "За падение" if lang == "ru" else "Bearish"
+            lines.append(f"  ⬇️ {bear_lbl}: {html_lib.escape(top_bear)}")
+
+    # ── ЧТО ПРОИСХОДИТ ──
+    llm_text = _clean(d.get("llm_text", ""))
+    if what_happening:
+        lines.append("")
+        lines.append(f"<b>{t('what_happening', lang)}</b>")
+        lines.append(html_lib.escape(what_happening))
+
+    # ── ЛОВУШКА ──
+    if trap:
+        lines.append("")
+        lines.append(f"⚠️ <b>{t('trap', lang)}</b>")
+        lines.append(html_lib.escape(trap))
+
+    # ── ДАВЛЕНИЕ РЫНКА (визуальная шкала) ──
+    prob_bull = d.get("prob_bull")
+    prob_bear = d.get("prob_bear")
+    if prob_bull is not None and prob_bear is not None:
+        try:
+            pb = int(float(str(prob_bull)))
+            pr = int(float(str(prob_bear)))
+            if pb != 50 or pr != 50:
+                lines.append("")
+                gauge_title = "ДАВЛЕНИЕ РЫНКА" if lang == "ru" else "MARKET PRESSURE"
+                lines.append(f"<b>📊 {gauge_title}</b>")
+                bull_blocks = round(pb / 10)
+                bear_blocks = 10 - bull_blocks
+                bar = "█" * bull_blocks + "░" * bear_blocks
+                if pb >= pr:
+                    lines.append(f"<code>🐂 {bar} {pb}%</code>")
+                    if lang == "ru":
+                        hint = "быки доминируют" if pb >= 65 else "лёгкое преимущество быков"
+                    else:
+                        hint = "bulls dominate" if pb >= 65 else "slight bull advantage"
+                else:
+                    lines.append(f"<code>🐻 {bar} {pr}%</code>")
+                    if lang == "ru":
+                        hint = "медведи доминируют" if pr >= 65 else "лёгкое преимущество медведей"
+                    else:
+                        hint = "bears dominate" if pr >= 65 else "slight bear advantage"
+                lines.append(f"<i>{hint}</i>")
+        except (ValueError, TypeError):
+            pass
+
+    # ── КОНФЛИКТ FUNDING ──
+    funding_conflict = _clean(d.get("funding_conflict", ""))
+    if funding_conflict:
+        lines.append(f"ℹ️ {html_lib.escape(funding_conflict)}")
+
+    # ── PRO: полный LLM-анализ ──
+    if is_pro and llm_text:
+        lines.append("")
+        _ai_full_title = "🤖 AI-АНАЛИЗ (ПОЛНЫЙ)" if lang == "ru" else "🤖 AI ANALYSIS (FULL)"
+        lines.append(f"<b>{_ai_full_title}</b>")
+        lines.append(html_lib.escape(llm_text))
 
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
