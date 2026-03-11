@@ -9,13 +9,16 @@ import html as html_lib
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    LinkPreviewOptions
 )
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
 
 from config import BOT_TOKEN
 from database import db
+
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 from collector import collector_loop
 
 # ── Логирование ───────────────────────────────────────────────────────────────
@@ -1248,7 +1251,19 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 sc_icon = "🟡"
             else:
                 sc_icon = "🔴"
-            score_part = f"{sc_icon} {ai_sc}/100"
+            # Перевод лейбла
+            _ai_labels_ru = {
+                "STRONG BUY": "ПОКУПКА",
+                "BUY": "ПОКУПКА",
+                "NEUTRAL": "НЕЙТРАЛЬНО",
+                "SELL": "ПРОДАЖА",
+                "STRONG SELL": "ПРОДАЖА",
+            }
+            if lang == "ru":
+                ai_lbl = _ai_labels_ru.get(ai_score_label_val, ai_score_label_val)
+            else:
+                ai_lbl = ai_score_label_val
+            score_part = f"{sc_icon} <b>{ai_sc}/100</b> {ai_lbl}"
         except (ValueError, TypeError):
             pass
 
@@ -1357,11 +1372,10 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         lines.append(f"ℹ️ {html_lib.escape(funding_conflict)}")
 
     # ══════════════════════════════════════════════════════════════
-    # СЕКЦИИ ТОЛЬКО ДЛЯ PRO (рынок, order flow, ликвидации, структура)
+    # РЫНОЧНЫЕ ДАННЫЕ (Basic: ключевые метрики, Pro: + advanced)
     # ══════════════════════════════════════════════════════════════
-    if is_pro:
-        lines.append("")
-        lines.append(t("section_market", lang))
+    lines.append("")
+    lines.append(t("section_market", lang))
 
     # Данные
     sma50_val = d.get("sma50", "—")
@@ -1376,8 +1390,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     bg_long_acc = str(d.get("bitget_long_acc", "—")).replace("%", "")
     bg_short_acc = str(d.get("bitget_short_acc", "—")).replace("%", "")
 
-    # Тренд (Pro only)
-    if is_pro and _has(sma50_val) and _has(sma200_val):
+    # Тренд
+    if _has(sma50_val) and _has(sma200_val):
         try:
             s50 = float(str(sma50_val).replace("$", "").replace(",", ""))
             s200 = float(str(sma200_val).replace("$", "").replace(",", ""))
@@ -1388,8 +1402,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         except (ValueError, TypeError):
             pass
 
-    # Давление рынка (Pro only)
-    if is_pro and _has(long_p) and _has(short_p):
+    # Давление рынка
+    if _has(long_p) and _has(short_p):
         try:
             lp = float(long_p)
             sp = float(short_p)
@@ -1403,8 +1417,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         except (ValueError, TypeError):
             lines.append(f"⚖️ {t('ls_label', lang)}: <b>{long_p}%</b> / <b>{short_p}%</b>")
 
-    # Фандинг (Pro only)
-    if is_pro and _has(fr_val):
+    # Фандинг
+    if _has(fr_val):
         try:
             fv = float(str(fr_val).replace("%", "").replace("+", ""))
             if fv > 0.01:
@@ -1417,8 +1431,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         except (ValueError, TypeError):
             lines.append(f"💰 {t('funding_label', lang)}: <b>{fr_val}</b>")
 
-    # OI (Pro only)
-    if is_pro and _has(oi_chg):
+    # OI
+    if _has(oi_chg):
         try:
             oi_v = float(str(oi_chg).replace("%", "").replace("+", ""))
             if oi_v > 0.5:
@@ -1464,8 +1478,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         except (ValueError, TypeError):
             lines.append(f"📊 {t('oi_label', lang)}: <b>{oi_chg}</b>")
 
-    # RSI (Pro only)
-    if is_pro and _has(rsi_val):
+    # RSI
+    if _has(rsi_val):
         try:
             rv = float(rsi_val)
             if rv > 70:
@@ -1482,8 +1496,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         except (ValueError, TypeError):
             pass
 
-    # Fear & Greed (Pro only)
-    if is_pro and _has(fg):
+    # Fear & Greed
+    if _has(fg):
         try:
             fg_val = int(fg)
             if fg_val <= 25:
@@ -1500,7 +1514,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         except (ValueError, TypeError):
             pass
 
-    # ── КИТЫ vs ТОЛПА (Whale Alert + Netflow + Crowd) — Pro only ──
+    # ── КИТЫ vs ТОЛПА (Whale Alert + Netflow + Crowd) — PRO ──
     # Whale Alert данные (реальные транзакции за 1ч) — приоритет над netflow
     whale_txs = d.get("whale_txs", "0")
     whale_to_ex = d.get("whale_to_exchange", "—")
@@ -1563,7 +1577,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             except (ValueError, TypeError):
                 pass
 
-    # ETH Gas (Pro only)
+    # ETH Gas (PRO)
     if is_pro and coin == "ETH" and _has(d.get("eth_gas_avg", "—")):
         eth_gas = d.get("eth_gas_avg", "—")
         try:
@@ -2031,6 +2045,7 @@ async def cmd_start(message: Message):
     await message.answer(
         t("welcome", detected_lang),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_main(detected_lang),
     )
 
@@ -2043,6 +2058,7 @@ async def cmd_summary(message: Message):
     await message.answer(
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_radar(page=0, lang=lang)
     )
 
@@ -2063,6 +2079,7 @@ async def cmd_settings(message: Message):
         f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
         f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_settings(alerts, lang)
     )
 
@@ -2084,6 +2101,7 @@ async def cmd_status(message: Message):
         f"{t('status_coins', lang)}: <b>{len(coins)}</b>\n"
         f"{t('status_interval', lang)}: <b>{interval} мин</b>",
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_main(lang)
     )
 
@@ -2105,6 +2123,7 @@ async def cb_summary(call: CallbackQuery):
     await call.message.edit_text(
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_radar(page=0, lang=lang)
     )
     await call.answer()
@@ -2118,6 +2137,7 @@ async def cb_radar(call: CallbackQuery):
     await call.message.edit_text(
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_radar(page=0, lang=lang)
     )
     await call.answer()
@@ -2131,6 +2151,7 @@ async def cb_refresh(call: CallbackQuery):
     await call.message.edit_text(
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_radar(page=0, lang=lang)
     )
     await call.answer(t("refreshed", lang))
@@ -2146,6 +2167,7 @@ async def cb_page(call: CallbackQuery):
     await call.message.edit_text(
         text_radar(coins, data, lang),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_radar(page=page, lang=lang)
     )
     await call.answer()
@@ -2166,6 +2188,7 @@ async def cb_coin(call: CallbackQuery):
     await call.message.edit_text(
         text_coin_analysis(coin, data, lang, view_mode=view_mode),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode)
     )
     await call.answer()
@@ -2206,6 +2229,7 @@ async def cb_viewmode(call: CallbackQuery):
     await call.message.edit_text(
         text_coin_analysis(coin, data, lang, view_mode=new_mode),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=new_mode)
     )
     await call.answer()
@@ -2245,6 +2269,7 @@ async def cb_options(call: CallbackQuery):
     await call.message.edit_text(
         text_options_detail(coin, data, lang, ai_text),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_options(coin, lang)
     )
     await call.answer()
@@ -2266,6 +2291,7 @@ async def cb_settings(call: CallbackQuery):
         f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
         f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_settings(alerts, lang)
     )
     await call.answer()
@@ -2288,6 +2314,7 @@ async def cb_interval(call: CallbackQuery):
         f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
         f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_settings(alerts, lang)
     )
     await call.answer(t("interval_set", lang, interval=interval))
@@ -2310,6 +2337,7 @@ async def cb_toggle_alerts(call: CallbackQuery):
         f"{t('settings_alerts', lang)}: <b>{alert_status}</b>\n\n"
         f"{t('settings_choose_interval', lang)}",
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_settings(enable, lang)
     )
     status_text = t("alerts_on_short", lang) if enable else t("alerts_off_short", lang)
@@ -2337,6 +2365,7 @@ async def cb_toggle_lang(call: CallbackQuery):
         f"{t('settings_alerts', new_lang)}: <b>{alert_status}</b>\n\n"
         f"{t('settings_choose_interval', new_lang)}",
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_settings(alerts, new_lang)
     )
     await call.answer(f"🌐 {'English' if new_lang == 'en' else 'Русский'}")
@@ -2352,6 +2381,7 @@ async def cb_subscription(call: CallbackQuery):
         f"{t('sub_pro', lang)}\n"
         f"{t('sub_pro_plus', lang)}",
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_subscription(lang)
     )
     await call.answer()
@@ -2379,6 +2409,7 @@ async def cb_help(call: CallbackQuery):
     await call.message.edit_text(
         t("help", lang),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_main")]
         ])
@@ -2392,6 +2423,7 @@ async def cb_back_main(call: CallbackQuery):
     await call.message.edit_text(
         t("welcome", lang),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_main(lang)
     )
     await call.answer()
@@ -2445,6 +2477,7 @@ async def cb_faq(call: CallbackQuery):
     await call.message.edit_text(
         t("faq_title", lang),
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_faq(lang),
     )
     await call.answer()
@@ -2460,6 +2493,7 @@ async def cb_faq_item(call: CallbackQuery):
     await call.message.edit_text(
         text,
         parse_mode=ParseMode.HTML,
+        link_preview=NO_PREVIEW,
         reply_markup=kb_faq_back(lang),
     )
     await call.answer()
@@ -2492,6 +2526,7 @@ async def send_alerts():
                     chat_id=tid,
                     text=text,
                     parse_mode=ParseMode.HTML,
+                    link_preview=NO_PREVIEW,
                     reply_markup=kb_radar(page=0, lang=lang)
                 )
                 await db.update_last_alert(tid)
