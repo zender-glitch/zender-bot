@@ -2108,28 +2108,41 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 lines.append(_dx_line)
 
     # ── ГЛУБИНА СТАКАНА (PRO) ──
+    # Приоритет: Kraken OB → fallback на Binance OBI
     if is_pro:
         bid_depth = d.get("bid_depth_usd", "—")
         ask_depth = d.get("ask_depth_usd", "—")
         ba_ratio = d.get("bid_ask_ratio", "—")
-        if _has(bid_depth) and _has(ask_depth):
+        # Fallback: если Kraken не вернул данные, берём из Binance OBI
+        _bd_val = 0
+        _ad_val = 0
+        try:
+            _bd_val = float(str(bid_depth).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
+            _ad_val = float(str(ask_depth).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
+        except (ValueError, TypeError):
+            pass
+        if _bd_val < 1000 or _ad_val < 1000:
+            # Kraken пусто — используем Binance OBI данные
+            obi_bid = d.get("obi_bid_vol", "—")
+            obi_ask = d.get("obi_ask_vol", "—")
+            try:
+                _bd_val = float(str(obi_bid).replace("$", "").replace(",", ""))
+                _ad_val = float(str(obi_ask).replace("$", "").replace(",", ""))
+            except (ValueError, TypeError):
+                _bd_val = 0
+                _ad_val = 0
+        if _bd_val > 1000 and _ad_val > 1000:
             lines.append("")
             _ob_title = "── СТАКАН (PRO) ──" if lang == "ru" else "── ORDER BOOK (PRO) ──"
             lines.append(_ob_title)
-            try:
-                bd = float(str(bid_depth).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
-                ad = float(str(ask_depth).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
-                lines.append(f"🟢 Bid: <b>${bd/1e6:.1f}M</b> · 🔴 Ask: <b>${ad/1e6:.1f}M</b>")
-                if bd > ad * 1.3:
-                    _ob_hint = "стена покупок — поддержка сильнее" if lang == "ru" else "bid wall — support is stronger"
-                elif ad > bd * 1.3:
-                    _ob_hint = "стена продаж — сопротивление сильнее" if lang == "ru" else "ask wall — resistance is stronger"
-                else:
-                    _ob_hint = "стакан сбалансирован" if lang == "ru" else "order book balanced"
-                lines.append(f"→ {_ob_hint}")
-            except (ValueError, TypeError):
-                if _has(ba_ratio):
-                    lines.append(f"Bid/Ask: <b>{ba_ratio}</b>")
+            lines.append(f"🟢 Bid: <b>${_bd_val/1e6:.1f}M</b> · 🔴 Ask: <b>${_ad_val/1e6:.1f}M</b>")
+            if _bd_val > _ad_val * 1.3:
+                _ob_hint = "стена покупок — поддержка сильнее" if lang == "ru" else "bid wall — support is stronger"
+            elif _ad_val > _bd_val * 1.3:
+                _ob_hint = "стена продаж — сопротивление сильнее" if lang == "ru" else "ask wall — resistance is stronger"
+            else:
+                _ob_hint = "стакан сбалансирован" if lang == "ru" else "order book balanced"
+            lines.append(f"→ {_ob_hint}")
 
     # ── КИТЫ vs ТОЛПА (Whale Alert + Netflow + Crowd) ──
     # Whale Alert данные (реальные транзакции за 1ч) — приоритет над netflow
