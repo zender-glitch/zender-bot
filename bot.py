@@ -2440,6 +2440,42 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 except (ValueError, TypeError):
                     pass
 
+    # ── SOLANA DEFI (PRO, только SOL) ──
+    if is_pro and coin == "SOL":
+        sol_dex_vol = d.get("sol_dex_volume", "—")
+        sol_dex_chg = d.get("sol_dex_volume_change", "—")
+        sol_tvl = d.get("sol_tvl", "—")
+        sol_tvl_chg = d.get("sol_tvl_change", "—")
+        if _has(sol_dex_vol) or _has(sol_tvl):
+            lines.append("")
+            _sol_title = "── SOLANA DEFI (PRO) ──" if lang == "ru" else "── SOLANA DEFI (PRO) ──"
+            lines.append(_sol_title)
+            if _has(sol_dex_vol):
+                _vol_line = f"📊 DEX Volume (24ч): <b>{sol_dex_vol}</b>"
+                if _has(sol_dex_chg) and sol_dex_chg != "—":
+                    _vol_line += f" ({sol_dex_chg})"
+                lines.append(_vol_line)
+            if _has(sol_tvl):
+                _tvl_line = f"🔒 TVL Solana: <b>{sol_tvl}</b>"
+                if _has(sol_tvl_chg) and sol_tvl_chg != "—":
+                    _tvl_line += f" ({sol_tvl_chg})"
+                lines.append(_tvl_line)
+            # Подсказка по активности
+            try:
+                _dex_chg_val = float(str(sol_dex_chg).replace("%", "").replace("+", "")) if _has(sol_dex_chg) and sol_dex_chg != "—" else 0
+                _tvl_chg_val = float(str(sol_tvl_chg).replace("%", "").replace("+", "")) if _has(sol_tvl_chg) and sol_tvl_chg != "—" else 0
+                if _dex_chg_val > 10 or _tvl_chg_val > 2:
+                    _hint = "DeFi активность растёт" if lang == "ru" else "DeFi activity growing"
+                    lines.append(f"→ {_hint}")
+                elif _dex_chg_val < -10 or _tvl_chg_val < -2:
+                    _hint = "DeFi активность падает" if lang == "ru" else "DeFi activity declining"
+                    lines.append(f"→ {_hint}")
+                else:
+                    _hint = "DeFi активность стабильна" if lang == "ru" else "DeFi activity stable"
+                    lines.append(f"→ {_hint}")
+            except (ValueError, TypeError):
+                pass
+
     # Вход / Стоп / Цель
     if entry or stop or target:
         lines.append("")

@@ -1559,6 +1559,62 @@ async def fetch_defillama_data() -> dict:
     return result
 
 
+# ── Solana DeFi данные (DEX volume + TVL Solana) ──────────────────────────────
+
+SOLANA_DEFI_CACHE = {}
+SOLANA_DEFI_CACHE_TTL = 10 * 60  # 10 минут
+
+
+async def fetch_solana_defi() -> dict:
+    """
+    DeFiLlama: DEX volume Solana (24h) + TVL Solana.
+    Бесплатно, без ключа. Кэш 10 мин.
+    """
+    if "sol_defi" in SOLANA_DEFI_CACHE and (time.time() - SOLANA_DEFI_CACHE["sol_defi"]["ts"]) < SOLANA_DEFI_CACHE_TTL:
+        return SOLANA_DEFI_CACHE["sol_defi"]["data"]
+
+    result = {}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # 1. DEX Volume Solana (24h)
+            resp = await client.get("https://api.llama.fi/overview/dexs/solana?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true&dataType=dailyVolume")
+            if resp.status_code == 200:
+                data = resp.json()
+                total_24h = data.get("total24h")
+                total_48to24h = data.get("total48hto24h")
+                if total_24h:
+                    result["sol_dex_volume"] = float(total_24h)
+                    if total_48to24h and float(total_48to24h) > 0:
+                        chg = ((float(total_24h) - float(total_48to24h)) / float(total_48to24h)) * 100
+                        result["sol_dex_volume_change"] = round(chg, 1)
+                    log.info(f"  🔷 Solana DEX Vol: ${float(total_24h)/1e9:.2f}B")
+
+            await asyncio.sleep(0.5)
+
+            # 2. TVL Solana
+            resp2 = await client.get("https://api.llama.fi/v2/historicalChainTvl/Solana")
+            if resp2.status_code == 200:
+                tvl_data = resp2.json()
+                if isinstance(tvl_data, list) and len(tvl_data) > 0:
+                    last = tvl_data[-1].get("tvl")
+                    if last:
+                        result["sol_tvl"] = float(last)
+                    if len(tvl_data) >= 2:
+                        prev = tvl_data[-2].get("tvl")
+                        if prev and float(prev) > 0:
+                            chg = ((float(last) - float(prev)) / float(prev)) * 100
+                            result["sol_tvl_change"] = round(chg, 2)
+                    log.info(f"  🔷 Solana TVL: ${float(last)/1e9:.2f}B")
+
+    except Exception as e:
+        log.warning(f"Solana DeFi error: {e}")
+
+    if result:
+        SOLANA_DEFI_CACHE["sol_defi"] = {"data": result, "ts": time.time()}
+
+    return result
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # BITGET (бесплатно, без ключа — работает из US серверов Railway)
 # OKX, Binance, Bybit — ВСЕ блокируют US серверы (451/403/400)
@@ -3324,6 +3380,9 @@ async def collect_all():
     # DeFiLlama: стейблкоины + TVL (бесплатно)
     defillama_data = await fetch_defillama_data()
 
+    # Solana DeFi: DEX volume + TVL Solana (бесплатно)
+    solana_defi_data = await fetch_solana_defi()
+
     # Etherscan: ETH gas + supply (бесплатно, ключ нужен)
     etherscan_data = await fetch_etherscan_data()
 
@@ -3454,6 +3513,7 @@ async def collect_all():
                 **flow_data,         # CVD + Order Book Imbalance (Binance Futures)
                 **spot_perp_data,    # Spot vs Perp Volume (Binance)
                 **whale_data,        # Whale Alert: крупные транзакции китов
+                **(solana_defi_data if symbol == "SOL" else {}),  # Solana DeFi (только SOL)
                 "mkt_liq_long": total_liq_long_1h,
                 "mkt_liq_short": total_liq_short_1h,
             }
@@ -3598,6 +3658,10 @@ async def collect_all():
                 "whale_from_exchange": fmt_usd(coin_data.get("whale_from_exchange")) if coin_data.get("whale_from_exchange") else "—",
                 "whale_total_usd": fmt_usd(coin_data.get("whale_total_usd")) if coin_data.get("whale_total_usd") else "—",
                 "whale_direction": str(coin_data.get("whale_direction", "—")),
+                "sol_dex_volume": fmt_usd(coin_data.get("sol_dex_volume")) if coin_data.get("sol_dex_volume") else "—",
+                "sol_dex_volume_change": fmt_pct(coin_data.get("sol_dex_volume_change")) if coin_data.get("sol_dex_volume_change") is not None else "—",
+                "sol_tvl": fmt_usd(coin_data.get("sol_tvl")) if coin_data.get("sol_tvl") else "—",
+                "sol_tvl_change": fmt_pct(coin_data.get("sol_tvl_change")) if coin_data.get("sol_tvl_change") is not None else "—",
                 "signal": signal_bar,
                 "label": signal_label,
                 "signal_label": signal_label,
