@@ -1869,17 +1869,19 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             _conf_title = "Уверенность" if lang == "ru" else "Confidence"
             lines.append(f"  {_conf_title}: {conf_bar} {conf_label}")
 
-    # Цель + Стоп + Горизонт — ОДНА строка
+    # Цель + Стоп + Горизонт — каждый на отдельной строке с подписью
     horizon = _clean(d.get("horizon", ""))
-    levels_parts = []
+    if target or stop or horizon:
+        lines.append("")
     if target:
-        levels_parts.append(f"🎯{html_lib.escape(target)}")
+        _tgt_lbl = "Цель" if lang == "ru" else "Target"
+        lines.append(f"🎯 {_tgt_lbl}: <b>{html_lib.escape(target)}</b>")
     if stop:
-        levels_parts.append(f"🛑{html_lib.escape(stop)}")
+        _stp_lbl = "Стоп" if lang == "ru" else "Stop"
+        lines.append(f"🛑 {_stp_lbl}: <b>{html_lib.escape(stop)}</b>")
     if horizon:
-        levels_parts.append(f"⏱{html_lib.escape(horizon)}")
-    if levels_parts:
-        lines.append("  ".join(levels_parts))
+        _hor_lbl = "Горизонт" if lang == "ru" else "Timeframe"
+        lines.append(f"⏱ {_hor_lbl}: <b>{html_lib.escape(horizon)}</b>")
 
     # ══════════════════════════════════════════════════════════════
     # РЫНОЧНЫЕ ДАННЫЕ (сначала все данные)
