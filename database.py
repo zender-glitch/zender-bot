@@ -64,6 +64,13 @@ class Database:
         user = await self.get_user(telegram_id)
         return user.get("plan", "free") if user else "free"
 
+    async def get_view_mode(self, telegram_id) -> str:
+        user = await self.get_user(telegram_id)
+        return user.get("view_mode", "basic") if user else "basic"
+
+    async def set_view_mode(self, telegram_id, mode: str):
+        await self.update_user(telegram_id, {"view_mode": mode})
+
     # ── Алерты ────────────────────────────────────────────────────────────────
 
     async def get_users_for_alerts(self) -> list:

@@ -87,6 +87,20 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
         "btn_back": "◀ Назад",
         "btn_back_radar": "◀ Назад к радару",
         "btn_language": "🌐 Язык: Русский",
+        "btn_view_basic": "📋 Basic",
+        "btn_view_basic_on": "📋 Basic ✓",
+        "btn_view_pro": "📊 Pro",
+        "btn_view_pro_on": "📊 Pro ✓",
+        "pro_promo": """📊 <b>PRO-режим</b> — развёрнутый анализ
+
+Что даёт Pro-вид:
+• Полный AI-разбор (не 2-3 предложения, а детальный анализ)
+• Опционы прямо в карточке
+• Расширенный order flow
+• On-chain детали
+• Исторические сравнения
+
+🔓 Подпишись на <b>Pro $29/мес</b> чтобы разблокировать""",
 
         # Настройки
         "settings_title": "⚙️ Настройки",
@@ -499,6 +513,20 @@ Santiment · Deribit · Nansen · and 20+ more
         "btn_back": "◀ Back",
         "btn_back_radar": "◀ Back to radar",
         "btn_language": "🌐 Lang: English",
+        "btn_view_basic": "📋 Basic",
+        "btn_view_basic_on": "📋 Basic ✓",
+        "btn_view_pro": "📊 Pro",
+        "btn_view_pro_on": "📊 Pro ✓",
+        "pro_promo": """📊 <b>PRO View</b> — extended analysis
+
+What PRO view gives you:
+• Full AI breakdown (detailed analysis, not 2-3 sentences)
+• Options data in the card
+• Extended order flow
+• On-chain details
+• Historical comparisons
+
+🔓 Subscribe to <b>Pro $29/mo</b> to unlock""",
 
         # Settings
         "settings_title": "⚙️ Settings",
@@ -972,17 +1000,29 @@ def kb_radar(page: int = 0, lang: str = "ru"):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def kb_coin_detail(coin: str, page: int = 0, lang: str = "ru"):
+def kb_coin_detail(coin: str, page: int = 0, lang: str = "ru", view_mode: str = "basic"):
     """Кнопки под анализом монеты"""
     rows = _coin_page_buttons(page)
     nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
     if nav:
         rows.append(nav)
-    # Кнопка Опционы на отдельную строку (полная ширина)
-    if coin in COINS_WITH_OPTIONS:
+    # Кнопка Опционы на отдельную строку (полная ширина) — только в Basic
+    if coin in COINS_WITH_OPTIONS and view_mode == "basic":
         rows.append([InlineKeyboardButton(
             text=t("btn_options", lang, coin=coin), callback_data=f"options_{coin}"
         )])
+    # Переключатель Basic / Pro — для ВСЕХ пользователей
+    if view_mode == "pro":
+        view_row = [
+            InlineKeyboardButton(text=t("btn_view_basic", lang), callback_data=f"viewmode_basic_{coin}"),
+            InlineKeyboardButton(text=t("btn_view_pro_on", lang), callback_data="noop"),
+        ]
+    else:
+        view_row = [
+            InlineKeyboardButton(text=t("btn_view_basic_on", lang), callback_data="noop"),
+            InlineKeyboardButton(text=t("btn_view_pro", lang), callback_data=f"viewmode_pro_{coin}"),
+        ]
+    rows.append(view_row)
     action_row = [
         InlineKeyboardButton(text=t("btn_refresh", lang), callback_data=f"coin_{coin}"),
         InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
@@ -1155,8 +1195,9 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
     return "\n".join(lines)
 
 
-def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
-    """Компактный анализ монеты."""
+def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str = "basic") -> str:
+    """Анализ монеты. view_mode='basic' — компактный, 'pro' — развёрнутый."""
+    is_pro = (view_mode == "pro")
     d = data.get(coin, {})
     price  = d.get("price",  "—")
     change = d.get("change", "—")
@@ -1242,8 +1283,19 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     # ПОЛНЫЙ АНАЛИЗ (после карточки)
     # ══════════════════════════════════════════════════════════════
 
+    # Лейбл режима
+    if is_pro:
+        _mode_label = "📊 PRO" if lang == "ru" else "📊 PRO"
+        lines.append(f"\n<b>{_mode_label}</b>")
+
     # ── ЧТО ПРОИСХОДИТ ──
-    if what_happening:
+    # В Basic — краткий what_happening, в Pro — полный llm_text
+    llm_text = _clean(d.get("llm_text", ""))
+    if is_pro and llm_text:
+        lines.append("")
+        lines.append(f"<b>🤖 AI-АНАЛИЗ</b>")
+        lines.append(html_lib.escape(llm_text))
+    elif what_happening:
         lines.append("")
         lines.append(f"<b>{t('what_happening', lang)}</b>")
         lines.append(html_lib.escape(what_happening))
@@ -1304,8 +1356,12 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     if funding_conflict:
         lines.append(f"ℹ️ {html_lib.escape(funding_conflict)}")
 
-    lines.append("")
-    lines.append(t("section_market", lang))
+    # ══════════════════════════════════════════════════════════════
+    # СЕКЦИИ ТОЛЬКО ДЛЯ PRO (рынок, order flow, ликвидации, структура)
+    # ══════════════════════════════════════════════════════════════
+    if is_pro:
+        lines.append("")
+        lines.append(t("section_market", lang))
 
     # Данные
     sma50_val = d.get("sma50", "—")
@@ -1320,8 +1376,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     bg_long_acc = str(d.get("bitget_long_acc", "—")).replace("%", "")
     bg_short_acc = str(d.get("bitget_short_acc", "—")).replace("%", "")
 
-    # Тренд
-    if _has(sma50_val) and _has(sma200_val):
+    # Тренд (Pro only)
+    if is_pro and _has(sma50_val) and _has(sma200_val):
         try:
             s50 = float(str(sma50_val).replace("$", "").replace(",", ""))
             s200 = float(str(sma200_val).replace("$", "").replace(",", ""))
@@ -1332,8 +1388,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         except (ValueError, TypeError):
             pass
 
-    # Давление рынка
-    if _has(long_p) and _has(short_p):
+    # Давление рынка (Pro only)
+    if is_pro and _has(long_p) and _has(short_p):
         try:
             lp = float(long_p)
             sp = float(short_p)
@@ -1347,8 +1403,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         except (ValueError, TypeError):
             lines.append(f"⚖️ {t('ls_label', lang)}: <b>{long_p}%</b> / <b>{short_p}%</b>")
 
-    # Фандинг
-    if _has(fr_val):
+    # Фандинг (Pro only)
+    if is_pro and _has(fr_val):
         try:
             fv = float(str(fr_val).replace("%", "").replace("+", ""))
             if fv > 0.01:
@@ -1361,8 +1417,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         except (ValueError, TypeError):
             lines.append(f"💰 {t('funding_label', lang)}: <b>{fr_val}</b>")
 
-    # OI
-    if _has(oi_chg):
+    # OI (Pro only)
+    if is_pro and _has(oi_chg):
         try:
             oi_v = float(str(oi_chg).replace("%", "").replace("+", ""))
             if oi_v > 0.5:
@@ -1408,8 +1464,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         except (ValueError, TypeError):
             lines.append(f"📊 {t('oi_label', lang)}: <b>{oi_chg}</b>")
 
-    # RSI
-    if _has(rsi_val):
+    # RSI (Pro only)
+    if is_pro and _has(rsi_val):
         try:
             rv = float(rsi_val)
             if rv > 70:
@@ -1426,8 +1482,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         except (ValueError, TypeError):
             pass
 
-    # Fear & Greed
-    if _has(fg):
+    # Fear & Greed (Pro only)
+    if is_pro and _has(fg):
         try:
             fg_val = int(fg)
             if fg_val <= 25:
@@ -1444,7 +1500,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         except (ValueError, TypeError):
             pass
 
-    # ── КИТЫ vs ТОЛПА (Whale Alert + Netflow + Crowd) ──
+    # ── КИТЫ vs ТОЛПА (Whale Alert + Netflow + Crowd) — Pro only ──
     # Whale Alert данные (реальные транзакции за 1ч) — приоритет над netflow
     whale_txs = d.get("whale_txs", "0")
     whale_to_ex = d.get("whale_to_exchange", "—")
@@ -1462,7 +1518,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     has_netflow = (coin == "BTC" and _has(netflow) and not has_whale_alert)
     has_crowd = _has(bg_long_acc)
 
-    if has_whale_alert or has_netflow or has_crowd:
+    if is_pro and (has_whale_alert or has_netflow or has_crowd):
         lines.append("")
         lines.append(t("whales_vs_crowd", lang))
 
@@ -1507,8 +1563,8 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
             except (ValueError, TypeError):
                 pass
 
-    # ETH Gas
-    if coin == "ETH" and _has(d.get("eth_gas_avg", "—")):
+    # ETH Gas (Pro only)
+    if is_pro and coin == "ETH" and _has(d.get("eth_gas_avg", "—")):
         eth_gas = d.get("eth_gas_avg", "—")
         try:
             gas_v = int(float(str(eth_gas)))
@@ -1533,7 +1589,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     has_cvd = _has(cvd_val) and cvd_val != "—"
     has_obi = _has(obi_bid) and obi_bid != "—" and _has(obi_ask) and obi_ask != "—"
 
-    if has_cvd or has_obi:
+    if is_pro and (has_cvd or has_obi):
         lines.append("")
         _of_title = "── ПОТОК ОРДЕРОВ ──" if lang == "ru" else "── ORDER FLOW ──"
         lines.append(_of_title)
@@ -1585,7 +1641,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     # ── LIQUIDITY MAP ──
     liq_lvl_shorts = d.get("liq_level_shorts", "")
     liq_lvl_longs = d.get("liq_level_longs", "")
-    if liq_lvl_shorts or liq_lvl_longs:
+    if is_pro and (liq_lvl_shorts or liq_lvl_longs):
         lines.append("")
         _liq_title = "── КАРТА ЛИКВИДАЦИЙ ──" if lang == "ru" else "── LIQUIDITY MAP ──"
         lines.append(_liq_title)
@@ -1602,7 +1658,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
     # ── MARKET STRUCTURE (Spot vs Perp) ──
     spot_vol = d.get("spot_volume", "")
     perp_vol = d.get("perp_volume", "")
-    if _has(spot_vol) and _has(perp_vol):
+    if is_pro and _has(spot_vol) and _has(perp_vol):
         try:
             sv = float(str(spot_vol).replace(",", ""))
             pv = float(str(perp_vol).replace(",", ""))
@@ -1624,13 +1680,14 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         except (ValueError, TypeError):
             pass
 
-    # ── УРОВНИ ──
-    lines.append("")
-    lines.append(t("section_levels", lang))
+    # ── УРОВНИ (Pro only — детализация ликвидаций) ──
+    if is_pro:
+        lines.append("")
+        lines.append(t("section_levels", lang))
 
     liq_up = d.get("liq_up", "—")
     liq_dn = d.get("liq_dn", "—")
-    if _has(liq_up) or _has(liq_dn):
+    if is_pro and (_has(liq_up) or _has(liq_dn)):
         lines.append(f"💥 {t('liq_1h', lang)}")
         if _has(liq_up) and _has(liq_dn):
             try:
@@ -1677,10 +1734,13 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
         if sell_zone:
             lines.append(f"{t('sell_label', lang)}: <b>{html_lib.escape(sell_zone)}</b>")
 
-    # ── ТИЗЕР ОПЦИОНОВ (только BTC/ETH) ──
+    # ── ОПЦИОНЫ (BTC/ETH) — тизер в Basic, полный блок в Pro ──
     if coin in ("BTC", "ETH"):
         pcr_val = d.get("options_pcr", "—")
         mp_val = d.get("options_max_pain", "—")
+        iv_val = d.get("options_iv", "—")
+        oi_calls = d.get("options_oi_calls", "—")
+        oi_puts = d.get("options_oi_puts", "—")
         # Ближайшая экспирация
         exp_raw = d.get("options_expiries", "—")
         nearest_exp = ""
@@ -1725,6 +1785,35 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru") -> str:
                 lines.append(f"📊 PCR: <b>{pcr_val}</b>")
             if nearest_exp:
                 lines.append(nearest_exp)
+
+            # PRO: дополнительные опционные данные inline
+            if is_pro:
+                # IV
+                if _has(iv_val) and iv_val != "—":
+                    try:
+                        iv_f = float(iv_val)
+                        if iv_f < 30:
+                            iv_hint = "тихо" if lang == "ru" else "quiet"
+                        elif iv_f < 60:
+                            iv_hint = "норма" if lang == "ru" else "normal"
+                        elif iv_f < 80:
+                            iv_hint = "повышенная" if lang == "ru" else "elevated"
+                        else:
+                            iv_hint = "шторм" if lang == "ru" else "extreme"
+                        lines.append(f"📈 IV: <b>{iv_f:.0f}%</b> — {iv_hint}")
+                    except (ValueError, TypeError):
+                        pass
+                # OI Calls/Puts
+                if _has(oi_calls) and oi_calls != "—" and _has(oi_puts) and oi_puts != "—":
+                    try:
+                        oi_c = float(oi_calls)
+                        oi_p = float(oi_puts)
+                        total_oi = oi_c + oi_p
+                        if total_oi > 0:
+                            call_pct = round(oi_c / total_oi * 100)
+                            lines.append(f"🟢 Calls: <b>{oi_c/1000:,.0f}K</b> ({call_pct}%) · 🔴 Puts: <b>{oi_p/1000:,.0f}K</b> ({100-call_pct}%)")
+                    except (ValueError, TypeError):
+                        pass
 
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
@@ -2065,6 +2154,7 @@ async def cb_page(call: CallbackQuery):
 @dp.callback_query(F.data.startswith("coin_"))
 async def cb_coin(call: CallbackQuery):
     lang = await get_user_lang(call.from_user.id)
+    view_mode = await db.get_view_mode(call.from_user.id)
     coin = call.data.replace("coin_", "")
     # Определяем страницу этой монеты
     try:
@@ -2074,9 +2164,49 @@ async def cb_coin(call: CallbackQuery):
         page = 0
     data = await db.get_market_data([coin])
     await call.message.edit_text(
-        text_coin_analysis(coin, data, lang),
+        text_coin_analysis(coin, data, lang, view_mode=view_mode),
         parse_mode=ParseMode.HTML,
-        reply_markup=kb_coin_detail(coin, page=page, lang=lang)
+        reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode)
+    )
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("viewmode_"))
+async def cb_viewmode(call: CallbackQuery):
+    """Переключение Basic/Pro вида"""
+    lang = await get_user_lang(call.from_user.id)
+    # viewmode_pro_BTC или viewmode_basic_BTC
+    parts = call.data.split("_", 2)  # ['viewmode', 'pro', 'BTC']
+    new_mode = parts[1]  # 'pro' или 'basic'
+    coin = parts[2] if len(parts) > 2 else "BTC"
+
+    # ТЕСТОВЫЙ РЕЖИМ: все подписки бесплатны — сразу переключаем
+    # В будущем: проверять план пользователя
+    # plan = await db.get_plan(call.from_user.id)
+    # if new_mode == "pro" and plan not in ("pro", "pro_plus"):
+    #     await call.answer()
+    #     await call.message.answer(
+    #         t("pro_promo", lang),
+    #         parse_mode=ParseMode.HTML,
+    #         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+    #             [InlineKeyboardButton(text=t("btn_subscription", lang), callback_data="subscription")],
+    #         ])
+    #     )
+    #     return
+
+    await db.set_view_mode(call.from_user.id, new_mode)
+
+    # Перерисовать карточку с новым режимом
+    try:
+        idx = COINS.index(coin)
+        page = idx // COINS_PER_PAGE
+    except ValueError:
+        page = 0
+    data = await db.get_market_data([coin])
+    await call.message.edit_text(
+        text_coin_analysis(coin, data, lang, view_mode=new_mode),
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=new_mode)
     )
     await call.answer()
 
