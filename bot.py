@@ -1830,26 +1830,38 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 sc_icon = "🟡"
             else:
                 sc_icon = "🔴"
-            # Перевод лейбла
-            _ai_labels_ru = {
-                "STRONG BUY": "ПОКУПКА",
-                "BUY": "ПОКУПКА",
-                "NEUTRAL": "НЕЙТРАЛЬНО",
-                "SELL": "ПРОДАЖА",
-                "STRONG SELL": "ПРОДАЖА",
-            }
+            # Лейбл настроения рынка (не направление торговли!)
             if lang == "ru":
-                ai_lbl = _ai_labels_ru.get(ai_score_label_val, ai_score_label_val)
+                if ai_sc >= 80:
+                    ai_mood = "сильный бычий"
+                elif ai_sc >= 60:
+                    ai_mood = "умеренный бычий"
+                elif ai_sc >= 45:
+                    ai_mood = "нейтральный"
+                elif ai_sc >= 20:
+                    ai_mood = "умеренный медвежий"
+                else:
+                    ai_mood = "сильный медвежий"
             else:
-                ai_lbl = ai_score_label_val
+                if ai_sc >= 80:
+                    ai_mood = "strong bullish"
+                elif ai_sc >= 60:
+                    ai_mood = "moderate bullish"
+                elif ai_sc >= 45:
+                    ai_mood = "neutral"
+                elif ai_sc >= 20:
+                    ai_mood = "moderate bearish"
+                else:
+                    ai_mood = "strong bearish"
             _ai_title = "AI-Анализ" if lang == "ru" else "AI Score"
-            score_part = f"{sc_icon} {_ai_title}: <b>{ai_sc}/100</b> {ai_lbl}"
+            score_part = f"{sc_icon} {_ai_title}: <b>{ai_sc}/100</b> ({ai_mood})"
         except (ValueError, TypeError):
             pass
 
     sig_part = ""
     if recommendation:
-        sig_part = f"{rec_icon} {rec_label}"
+        _sig_title = "Сигнал" if lang == "ru" else "Signal"
+        sig_part = f"{rec_icon} {_sig_title}: {rec_label}"
         if strength_label:
             sig_part += f" ({strength_label})"
 
