@@ -1324,6 +1324,9 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 lines.append(t("trend_up", lang))
             else:
                 lines.append(t("trend_down", lang))
+            # PRO: точные значения SMA
+            if is_pro:
+                lines.append(f"  SMA50: <b>${s50:,.0f}</b> · SMA200: <b>${s200:,.0f}</b>")
         except (ValueError, TypeError):
             pass
 
@@ -1439,7 +1442,97 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         except (ValueError, TypeError):
             pass
 
-    # ── КИТЫ vs ТОЛПА (Whale Alert + Netflow + Crowd) — PRO ──
+    # ══════════════════════════════════════════════════════════════
+    # PRO-СЕКЦИИ (видны только в Pro режиме)
+    # ══════════════════════════════════════════════════════════════
+
+    # ── МУЛЬТИ-БИРЖА (PRO) ──
+    if is_pro:
+        okx_long = d.get("okx_top_long", "—")
+        okx_short = d.get("okx_top_short", "—")
+        bg_long_pos = d.get("bitget_long_pos", "—")
+        bg_short_pos = d.get("bitget_short_pos", "—")
+        bg_oi = d.get("bitget_oi_usd", "—")
+        kraken_fr = d.get("kraken_funding", "—")
+        kraken_oi_val = d.get("kraken_oi", "—")
+        dydx_fr = d.get("dydx_funding", "—")
+        dydx_oi_val = d.get("dydx_oi", "—")
+
+        has_multi = (_has(okx_long) or _has(bg_long_pos) or _has(kraken_fr) or _has(dydx_fr))
+        if has_multi:
+            lines.append("")
+            _me_title = "── МУЛЬТИ-БИРЖА (PRO) ──" if lang == "ru" else "── MULTI-EXCHANGE (PRO) ──"
+            lines.append(_me_title)
+
+            # OKX Top Traders
+            if _has(okx_long) and _has(okx_short):
+                try:
+                    ol = float(str(okx_long).replace("%", ""))
+                    os_ = float(str(okx_short).replace("%", ""))
+                    _okx_hint = "быки" if ol > 55 else ("медведи" if os_ > 55 else "баланс")
+                    if lang != "ru":
+                        _okx_hint = "bulls" if ol > 55 else ("bears" if os_ > 55 else "balanced")
+                    lines.append(f"🏛 OKX Top: <b>{ol:.0f}%</b>L / <b>{os_:.0f}%</b>S — {_okx_hint}")
+                except (ValueError, TypeError):
+                    pass
+
+            # Bitget позиции
+            if _has(bg_long_pos) and _has(bg_short_pos):
+                try:
+                    bl = float(str(bg_long_pos).replace("%", ""))
+                    bs = float(str(bg_short_pos).replace("%", ""))
+                    lines.append(f"🔶 Bitget: <b>{bl:.0f}%</b>L / <b>{bs:.0f}%</b>S")
+                except (ValueError, TypeError):
+                    pass
+            if _has(bg_oi):
+                try:
+                    boi = float(str(bg_oi).replace("$", "").replace(",", ""))
+                    if boi >= 1e9:
+                        lines.append(f"  OI: <b>${boi/1e9:.2f}B</b>")
+                    elif boi >= 1e6:
+                        lines.append(f"  OI: <b>${boi/1e6:.1f}M</b>")
+                except (ValueError, TypeError):
+                    pass
+
+            # Kraken
+            if _has(kraken_fr):
+                _kr_line = f"🦑 Kraken: funding <b>{kraken_fr}</b>"
+                if _has(kraken_oi_val):
+                    _kr_line += f" · OI {kraken_oi_val}"
+                lines.append(_kr_line)
+
+            # dYdX
+            if _has(dydx_fr):
+                _dx_line = f"🟣 dYdX: funding <b>{dydx_fr}</b>"
+                if _has(dydx_oi_val):
+                    _dx_line += f" · OI {dydx_oi_val}"
+                lines.append(_dx_line)
+
+    # ── ГЛУБИНА СТАКАНА (PRO) ──
+    if is_pro:
+        bid_depth = d.get("bid_depth_usd", "—")
+        ask_depth = d.get("ask_depth_usd", "—")
+        ba_ratio = d.get("bid_ask_ratio", "—")
+        if _has(bid_depth) and _has(ask_depth):
+            lines.append("")
+            _ob_title = "── СТАКАН (PRO) ──" if lang == "ru" else "── ORDER BOOK (PRO) ──"
+            lines.append(_ob_title)
+            try:
+                bd = float(str(bid_depth).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
+                ad = float(str(ask_depth).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
+                lines.append(f"🟢 Bid: <b>${bd/1e6:.1f}M</b> · 🔴 Ask: <b>${ad/1e6:.1f}M</b>")
+                if bd > ad * 1.3:
+                    _ob_hint = "стена покупок — поддержка сильнее" if lang == "ru" else "bid wall — support is stronger"
+                elif ad > bd * 1.3:
+                    _ob_hint = "стена продаж — сопротивление сильнее" if lang == "ru" else "ask wall — resistance is stronger"
+                else:
+                    _ob_hint = "стакан сбалансирован" if lang == "ru" else "order book balanced"
+                lines.append(f"→ {_ob_hint}")
+            except (ValueError, TypeError):
+                if _has(ba_ratio):
+                    lines.append(f"Bid/Ask: <b>{ba_ratio}</b>")
+
+    # ── КИТЫ vs ТОЛПА (Whale Alert + Netflow + Crowd) ──
     # Whale Alert данные (реальные транзакции за 1ч) — приоритет над netflow
     whale_txs = d.get("whale_txs", "0")
     whale_to_ex = d.get("whale_to_exchange", "—")
@@ -1655,6 +1748,96 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             if _has(liq_dn):
                 lines.append(f"🔴 {t('liq_longs', lang)}: <b>{liq_dn}</b>")
 
+    # ── ОН-ЧЕЙН + МАКРО (PRO, BTC only) ──
+    if is_pro and coin == "BTC":
+        ahr999 = d.get("ahr999", "—")
+        bull_peak = d.get("bull_peak_ratio", "—")
+        btc_bubble = d.get("bitcoin_bubble", "—")
+        etf_flow = d.get("etf_netflow", "—")
+        defi_tvl = d.get("defi_tvl", "—")
+        defi_tvl_chg = d.get("defi_tvl_change", "—")
+        stbl_mcap = d.get("stablecoin_mcap", "—")
+
+        has_onchain = (_has(ahr999) or _has(bull_peak) or _has(etf_flow) or _has(defi_tvl))
+        if has_onchain:
+            lines.append("")
+            _oc_title = "── ОН-ЧЕЙН + МАКРО (PRO) ──" if lang == "ru" else "── ON-CHAIN + MACRO (PRO) ──"
+            lines.append(_oc_title)
+
+            # AHR999 — индикатор цикла
+            if _has(ahr999):
+                try:
+                    a = float(ahr999)
+                    if a < 0.45:
+                        _a_hint = "дно — идеальная зона покупки" if lang == "ru" else "bottom — ideal buy zone"
+                    elif a < 1.2:
+                        _a_hint = "зона накопления" if lang == "ru" else "accumulation zone"
+                    else:
+                        _a_hint = "перегрет — осторожно" if lang == "ru" else "overheated — caution"
+                    lines.append(f"📏 AHR999: <b>{a:.2f}</b> — {_a_hint}")
+                except (ValueError, TypeError):
+                    pass
+
+            # Bull Peak Ratio
+            if _has(bull_peak):
+                try:
+                    bp = float(bull_peak)
+                    if bp > 0.8:
+                        _bp_hint = "пик цикла близко" if lang == "ru" else "cycle peak near"
+                    elif bp > 0.5:
+                        _bp_hint = "средний цикл" if lang == "ru" else "mid-cycle"
+                    else:
+                        _bp_hint = "ранняя стадия" if lang == "ru" else "early stage"
+                    lines.append(f"📊 Bull Peak: <b>{bp:.2f}</b> — {_bp_hint}")
+                except (ValueError, TypeError):
+                    pass
+
+            # Bitcoin Bubble Index
+            if _has(btc_bubble):
+                try:
+                    bb = float(btc_bubble)
+                    if bb > 80:
+                        _bb_hint = "пузырь — осторожно!" if lang == "ru" else "bubble — caution!"
+                    elif bb > 50:
+                        _bb_hint = "разогрет" if lang == "ru" else "heated"
+                    else:
+                        _bb_hint = "норма" if lang == "ru" else "normal"
+                    lines.append(f"🫧 Bubble: <b>{bb:.0f}</b>/100 — {_bb_hint}")
+                except (ValueError, TypeError):
+                    pass
+
+            # ETF Netflow
+            if _has(etf_flow):
+                try:
+                    ef = float(str(etf_flow).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
+                    _ef_sign = "+" if ef > 0 else ""
+                    if ef > 0:
+                        _ef_hint = "деньги заходят" if lang == "ru" else "inflow"
+                    else:
+                        _ef_hint = "деньги уходят" if lang == "ru" else "outflow"
+                    lines.append(f"🏦 ETF: <b>{_ef_sign}${abs(ef)/1e6:.0f}M</b> — {_ef_hint}")
+                except (ValueError, TypeError):
+                    pass
+
+            # DeFi TVL
+            if _has(defi_tvl):
+                try:
+                    tvl = float(str(defi_tvl).replace("$", "").replace(",", "").replace("B", "e9").replace("M", "e6"))
+                    tvl_line = f"🔗 DeFi TVL: <b>${tvl/1e9:.1f}B</b>"
+                    if _has(defi_tvl_chg):
+                        tvl_line += f" ({defi_tvl_chg})"
+                    lines.append(tvl_line)
+                except (ValueError, TypeError):
+                    pass
+
+            # Stablecoin Market Cap
+            if _has(stbl_mcap):
+                try:
+                    sm = float(str(stbl_mcap).replace("$", "").replace(",", "").replace("B", "e9").replace("T", "e12"))
+                    lines.append(f"💵 Stablecoins: <b>${sm/1e9:.0f}B</b>")
+                except (ValueError, TypeError):
+                    pass
+
     # Вход / Стоп / Цель
     if entry or stop or target:
         lines.append("")
@@ -1671,33 +1854,25 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         if sell_zone:
             lines.append(f"{t('sell_label', lang)}: <b>{html_lib.escape(sell_zone)}</b>")
 
-    # ── ОПЦИОНЫ (BTC/ETH) — тизер в Basic, полный блок в Pro ──
+    # ── ОПЦИОНЫ (BTC/ETH) ──
     if coin in ("BTC", "ETH"):
         pcr_val = d.get("options_pcr", "—")
         mp_val = d.get("options_max_pain", "—")
         iv_val = d.get("options_iv", "—")
         oi_calls = d.get("options_oi_calls", "—")
         oi_puts = d.get("options_oi_puts", "—")
-        # Ближайшая экспирация
         exp_raw = d.get("options_expiries", "—")
-        nearest_exp = ""
+
+        # Парсим экспирации
+        parsed_exps = []
         if exp_raw and exp_raw != "—" and isinstance(exp_raw, str) and exp_raw.startswith("["):
             try:
                 import ast
-                exps = ast.literal_eval(exp_raw)
-                if exps and isinstance(exps, list):
-                    e = exps[0]
-                    _oi_k = e.get('oi', 0)
-                    try:
-                        _oi_k = float(_oi_k)
-                        _oi_str = f"{_oi_k/1000:.1f}K" if _oi_k >= 1000 else f"{_oi_k:,.0f}"
-                    except (ValueError, TypeError):
-                        _oi_str = str(_oi_k)
-                    _days = e.get('days', '?')
-                    _warn = " ⚠️" if isinstance(_days, int) and _days <= 3 else ""
-                    nearest_exp = f"🔥 {e.get('date', '')} · {_oi_str} OI · {_days}д{_warn}"
+                parsed_exps = ast.literal_eval(exp_raw)
+                if not isinstance(parsed_exps, list):
+                    parsed_exps = []
             except Exception:
-                pass
+                parsed_exps = []
 
         if _has(pcr_val) and pcr_val != "—":
             lines.append("")
@@ -1720,10 +1895,22 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 lines.append(f"📊 PCR: <b>{pcr_f:.2f}</b> {pcr_hint}{mp_str}")
             except (ValueError, TypeError):
                 lines.append(f"📊 PCR: <b>{pcr_val}</b>")
-            if nearest_exp:
-                lines.append(nearest_exp)
 
-            # Дополнительные опционные данные inline
+            # Basic: только ближайшая экспирация
+            # Pro: все 3 экспирации
+            _exp_limit = 3 if is_pro else 1
+            for i, e in enumerate(parsed_exps[:_exp_limit]):
+                _oi_k = e.get('oi', 0)
+                try:
+                    _oi_k = float(_oi_k)
+                    _oi_str = f"{_oi_k/1000:.1f}K" if _oi_k >= 1000 else f"{_oi_k:,.0f}"
+                except (ValueError, TypeError):
+                    _oi_str = str(_oi_k)
+                _days = e.get('days', '?')
+                _warn = " ⚠️" if isinstance(_days, int) and _days <= 3 else ""
+                _fire = "🔥" if i == 0 else "📅"
+                lines.append(f"{_fire} {e.get('date', '')} · {_oi_str} OI · {_days}д{_warn}")
+
             # IV
             if _has(iv_val) and iv_val != "—":
                 try:
@@ -1739,6 +1926,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                     lines.append(f"📈 IV: <b>{iv_f:.0f}%</b> — {iv_hint}")
                 except (ValueError, TypeError):
                     pass
+
             # OI Calls/Puts
             if _has(oi_calls) and oi_calls != "—" and _has(oi_puts) and oi_puts != "—":
                 try:
