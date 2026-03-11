@@ -231,7 +231,7 @@ async def _fetch_history_coingecko(symbol: str, client: httpx.AsyncClient) -> li
 
 
 async def _fetch_history_cryptocompare(symbol: str, client: httpx.AsyncClient) -> list[float] | None:
-    """Fallback: 200 дней цен из CryptoCompare (бесплатно, без ключа, стабильный)."""
+    """Fallback 2: 200 дней цен из CryptoCompare."""
     try:
         resp = await client.get(
             f"{CRYPTOCOMPARE_BASE}/data/v2/histoday",
@@ -244,7 +244,6 @@ async def _fetch_history_cryptocompare(symbol: str, client: httpx.AsyncClient) -
         if len(data) < 50:
             log.warning(f"  ⚠️ CryptoCompare history {symbol}: мало данных ({len(data)} точек)")
             return None
-        # close price из каждого дня
         closes = [d["close"] for d in data if d.get("close") and d["close"] > 0]
         if len(closes) < 50:
             return None
@@ -252,6 +251,44 @@ async def _fetch_history_cryptocompare(symbol: str, client: httpx.AsyncClient) -
         return closes
     except Exception as e:
         log.warning(f"  ⚠️ CryptoCompare history {symbol} error: {e}")
+        return None
+
+
+# Binance символы — маппинг наших тикеров на Binance торговые пары
+BINANCE_SYMBOLS = {
+    "BTC": "BTCUSDT", "ETH": "ETHUSDT", "BNB": "BNBUSDT", "SOL": "SOLUSDT",
+    "XRP": "XRPUSDT", "ADA": "ADAUSDT", "DOGE": "DOGEUSDT", "AVAX": "AVAXUSDT",
+    "DOT": "DOTUSDT", "LINK": "LINKUSDT", "POL": "POLUSDT", "TRX": "TRXUSDT",
+    "SHIB": "SHIBUSDT", "UNI": "UNIUSDT", "LTC": "LTCUSDT", "ATOM": "ATOMUSDT",
+    "NEAR": "NEARUSDT", "APT": "APTUSDT", "ARB": "ARBUSDT", "OP": "OPUSDT",
+}
+
+
+async def _fetch_history_binance(symbol: str, client: httpx.AsyncClient) -> list[float] | None:
+    """Fallback 3: 200 дней цен из Binance klines API (бесплатно, надёжно, без ключа)."""
+    binance_sym = BINANCE_SYMBOLS.get(symbol)
+    if not binance_sym:
+        return None
+    try:
+        resp = await client.get(
+            "https://api.binance.com/api/v3/klines",
+            params={"symbol": binance_sym, "interval": "1d", "limit": 201}
+        )
+        if resp.status_code != 200:
+            log.warning(f"  ⚠️ Binance klines {symbol}: HTTP {resp.status_code}")
+            return None
+        data = resp.json()
+        if not isinstance(data, list) or len(data) < 50:
+            log.warning(f"  ⚠️ Binance klines {symbol}: мало данных ({len(data) if isinstance(data, list) else 0} точек)")
+            return None
+        # Binance kline: [open_time, open, high, low, close, volume, ...]
+        closes = [float(candle[4]) for candle in data if float(candle[4]) > 0]
+        if len(closes) < 50:
+            return None
+        log.info(f"  📊 Binance klines {symbol}: {len(closes)} дней загружено")
+        return closes
+    except Exception as e:
+        log.warning(f"  ⚠️ Binance klines {symbol} error: {e}")
         return None
 
 
@@ -295,10 +332,15 @@ async def fetch_tech_indicators(symbol: str) -> dict:
             if closes:
                 source = "CoinGecko"
             else:
-                # Попытка 2: CryptoCompare fallback (без rate limit проблем)
-                closes = await _fetch_history_cryptocompare(symbol, client)
+                # Попытка 2: Binance klines (надёжный, без rate limit)
+                closes = await _fetch_history_binance(symbol, client)
                 if closes:
-                    source = "CryptoCompare"
+                    source = "Binance"
+                else:
+                    # Попытка 3: CryptoCompare fallback
+                    closes = await _fetch_history_cryptocompare(symbol, client)
+                    if closes:
+                        source = "CryptoCompare"
     except Exception as e:
         log.warning(f"Tech indicators {symbol} error: {e}")
 
