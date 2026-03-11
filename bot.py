@@ -1009,8 +1009,8 @@ def kb_coin_detail(coin: str, page: int = 0, lang: str = "ru", view_mode: str = 
     nav = _page_nav_buttons(page, TOTAL_PAGES, lang)
     if nav:
         rows.append(nav)
-    # Кнопка Опционы на отдельную строку (полная ширина) — только в Basic
-    if coin in COINS_WITH_OPTIONS and view_mode == "basic":
+    # Кнопка Опционы — в обоих режимах (Basic и Pro)
+    if coin in COINS_WITH_OPTIONS:
         rows.append([InlineKeyboardButton(
             text=t("btn_options", lang, coin=coin), callback_data=f"options_{coin}"
         )])
@@ -2936,7 +2936,12 @@ async def send_alerts():
                 sent += 1
                 await asyncio.sleep(0.1)
             except Exception as e:
-                log.warning(f"  ⚠️ Алерт {tid}: {e}")
+                err_msg = str(e)
+                log.warning(f"  ⚠️ Алерт {tid}: {err_msg}")
+                # Авто-отключение алертов если юзер заблокировал бота
+                if "blocked by the user" in err_msg or "user is deactivated" in err_msg:
+                    log.info(f"  🚫 Юзер {tid} заблокировал бота — отключаю алерты")
+                    await db.disable_alerts(tid)
 
         if sent:
             log.info(f"📨 Алерты отправлены: {sent}/{len(users)}")

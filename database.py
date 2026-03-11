@@ -116,6 +116,10 @@ class Database:
         now = datetime.now(timezone.utc).isoformat()
         await self.update_user(telegram_id, {"last_alert_at": now})
 
+    async def disable_alerts(self, telegram_id):
+        """Отключить алерты (юзер заблокировал бота)"""
+        await self.update_user(telegram_id, {"alerts_enabled": False})
+
     # ── Рыночные данные ──────────────────────────────────────────────────────
 
     async def upsert_market_data(self, record: dict):
