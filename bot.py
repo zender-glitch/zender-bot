@@ -1228,8 +1228,9 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     # ══════════════════════════════════════════════════════════════
     # ВИРУСНАЯ КАРТОЧКА (первые строки — видны при пересылке)
     # ══════════════════════════════════════════════════════════════
+    _pro_badge = "  📊 PRO" if is_pro else ""
     lines = [
-        f"<b>⚡ ZENDER TERMINAL</b>",
+        f"<b>⚡ ZENDER TERMINAL</b>{_pro_badge}",
         "",
         f"<b>{coin}</b>  {price}  {ch_icon} {change}",
     ]
@@ -1283,6 +1284,14 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     if card_parts:
         lines.append("")
         lines.append(" · ".join(card_parts))
+
+    # PRO: Confidence bar (уверенность сигнала)
+    if is_pro:
+        conf_bar = d.get("confidence_bar", "")
+        conf_label = d.get("confidence_label", "")
+        if conf_bar and conf_label:
+            _conf_title = "Уверенность" if lang == "ru" else "Confidence"
+            lines.append(f"  {_conf_title}: {conf_bar} {conf_label}")
 
     # Цель + Стоп + Горизонт — ОДНА строка
     horizon = _clean(d.get("horizon", ""))
@@ -1643,10 +1652,10 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 bid_v = float(obi_bid)
                 ask_v = float(obi_ask)
                 if bid_v > 0 or ask_v > 0:
-                    _buy_label = "Покупки" if lang == "ru" else "Buys"
-                    _sell_label = "Продажи" if lang == "ru" else "Sells"
-                    lines.append(f"🟢 {_buy_label}: <b>${bid_v/1e6:.1f}M</b>")
-                    lines.append(f"🔴 {_sell_label}: <b>${ask_v/1e6:.1f}M</b>")
+                    _bid_label = "Bid (заявки покупка)" if lang == "ru" else "Bid volume"
+                    _ask_label = "Ask (заявки продажа)" if lang == "ru" else "Ask volume"
+                    lines.append(f"🟢 {_bid_label}: <b>${bid_v/1e6:.1f}M</b>")
+                    lines.append(f"🔴 {_ask_label}: <b>${ask_v/1e6:.1f}M</b>")
             except (ValueError, TypeError):
                 pass
 
@@ -1748,65 +1757,70 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             if _has(liq_dn):
                 lines.append(f"🔴 {t('liq_longs', lang)}: <b>{liq_dn}</b>")
 
-    # ── ОН-ЧЕЙН + МАКРО (PRO, BTC only) ──
-    if is_pro and coin == "BTC":
-        ahr999 = d.get("ahr999", "—")
-        bull_peak = d.get("bull_peak_ratio", "—")
-        btc_bubble = d.get("bitcoin_bubble", "—")
-        etf_flow = d.get("etf_netflow", "—")
-        defi_tvl = d.get("defi_tvl", "—")
-        defi_tvl_chg = d.get("defi_tvl_change", "—")
-        stbl_mcap = d.get("stablecoin_mcap", "—")
+    # ── МАКРО (PRO, все монеты — данные глобальные, берём из BTC) ──
+    if is_pro:
+        # Глобальные данные хранятся в BTC записи, берём оттуда
+        _btc_d = data.get("BTC", {}) if coin != "BTC" else d
+        ahr999 = _btc_d.get("ahr999", "—")
+        bull_peak = _btc_d.get("bull_peak_ratio", "—")
+        btc_bubble = _btc_d.get("bitcoin_bubble", "—")
+        etf_flow = _btc_d.get("etf_netflow", "—")
+        defi_tvl = _btc_d.get("defi_tvl", "—")
+        defi_tvl_chg = _btc_d.get("defi_tvl_change", "—")
+        stbl_mcap = _btc_d.get("stablecoin_mcap", "—")
 
-        has_onchain = (_has(ahr999) or _has(bull_peak) or _has(etf_flow) or _has(defi_tvl))
-        if has_onchain:
+        has_macro = (_has(defi_tvl) or _has(stbl_mcap) or _has(etf_flow))
+        has_btc_onchain = coin == "BTC" and (_has(ahr999) or _has(bull_peak) or _has(btc_bubble))
+        if has_macro or has_btc_onchain:
             lines.append("")
-            _oc_title = "── ОН-ЧЕЙН + МАКРО (PRO) ──" if lang == "ru" else "── ON-CHAIN + MACRO (PRO) ──"
+            if coin == "BTC":
+                _oc_title = "── ОН-ЧЕЙН + МАКРО (PRO) ──" if lang == "ru" else "── ON-CHAIN + MACRO (PRO) ──"
+            else:
+                _oc_title = "── МАКРО (PRO) ──" if lang == "ru" else "── MACRO (PRO) ──"
             lines.append(_oc_title)
 
-            # AHR999 — индикатор цикла
-            if _has(ahr999):
-                try:
-                    a = float(ahr999)
-                    if a < 0.45:
-                        _a_hint = "дно — идеальная зона покупки" if lang == "ru" else "bottom — ideal buy zone"
-                    elif a < 1.2:
-                        _a_hint = "зона накопления" if lang == "ru" else "accumulation zone"
-                    else:
-                        _a_hint = "перегрет — осторожно" if lang == "ru" else "overheated — caution"
-                    lines.append(f"📏 AHR999: <b>{a:.2f}</b> — {_a_hint}")
-                except (ValueError, TypeError):
-                    pass
+            # BTC-only: AHR999, Bull Peak, Bubble
+            if coin == "BTC":
+                if _has(ahr999):
+                    try:
+                        a = float(ahr999)
+                        if a < 0.45:
+                            _a_hint = "дно — идеальная зона покупки" if lang == "ru" else "bottom — ideal buy zone"
+                        elif a < 1.2:
+                            _a_hint = "зона накопления" if lang == "ru" else "accumulation zone"
+                        else:
+                            _a_hint = "перегрет — осторожно" if lang == "ru" else "overheated — caution"
+                        lines.append(f"📏 AHR999: <b>{a:.2f}</b> — {_a_hint}")
+                    except (ValueError, TypeError):
+                        pass
 
-            # Bull Peak Ratio
-            if _has(bull_peak):
-                try:
-                    bp = float(bull_peak)
-                    if bp > 0.8:
-                        _bp_hint = "пик цикла близко" if lang == "ru" else "cycle peak near"
-                    elif bp > 0.5:
-                        _bp_hint = "средний цикл" if lang == "ru" else "mid-cycle"
-                    else:
-                        _bp_hint = "ранняя стадия" if lang == "ru" else "early stage"
-                    lines.append(f"📊 Bull Peak: <b>{bp:.2f}</b> — {_bp_hint}")
-                except (ValueError, TypeError):
-                    pass
+                if _has(bull_peak):
+                    try:
+                        bp = float(bull_peak)
+                        if bp > 0.8:
+                            _bp_hint = "пик цикла близко" if lang == "ru" else "cycle peak near"
+                        elif bp > 0.5:
+                            _bp_hint = "средний цикл" if lang == "ru" else "mid-cycle"
+                        else:
+                            _bp_hint = "ранняя стадия" if lang == "ru" else "early stage"
+                        lines.append(f"📊 Bull Peak: <b>{bp:.2f}</b> — {_bp_hint}")
+                    except (ValueError, TypeError):
+                        pass
 
-            # Bitcoin Bubble Index
-            if _has(btc_bubble):
-                try:
-                    bb = float(btc_bubble)
-                    if bb > 80:
-                        _bb_hint = "пузырь — осторожно!" if lang == "ru" else "bubble — caution!"
-                    elif bb > 50:
-                        _bb_hint = "разогрет" if lang == "ru" else "heated"
-                    else:
-                        _bb_hint = "норма" if lang == "ru" else "normal"
-                    lines.append(f"🫧 Bubble: <b>{bb:.0f}</b>/100 — {_bb_hint}")
-                except (ValueError, TypeError):
-                    pass
+                if _has(btc_bubble):
+                    try:
+                        bb = float(btc_bubble)
+                        if bb > 80:
+                            _bb_hint = "пузырь — осторожно!" if lang == "ru" else "bubble — caution!"
+                        elif bb > 50:
+                            _bb_hint = "разогрет" if lang == "ru" else "heated"
+                        else:
+                            _bb_hint = "норма" if lang == "ru" else "normal"
+                        lines.append(f"🫧 Bubble: <b>{bb:.0f}</b>/100 — {_bb_hint}")
+                    except (ValueError, TypeError):
+                        pass
 
-            # ETF Netflow
+            # Глобальные: ETF, DeFi, Stablecoins (для всех монет)
             if _has(etf_flow):
                 try:
                     ef = float(str(etf_flow).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
@@ -1815,11 +1829,10 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                         _ef_hint = "деньги заходят" if lang == "ru" else "inflow"
                     else:
                         _ef_hint = "деньги уходят" if lang == "ru" else "outflow"
-                    lines.append(f"🏦 ETF: <b>{_ef_sign}${abs(ef)/1e6:.0f}M</b> — {_ef_hint}")
+                    lines.append(f"🏦 BTC ETF: <b>{_ef_sign}${abs(ef)/1e6:.0f}M</b> — {_ef_hint}")
                 except (ValueError, TypeError):
                     pass
 
-            # DeFi TVL
             if _has(defi_tvl):
                 try:
                     tvl = float(str(defi_tvl).replace("$", "").replace(",", "").replace("B", "e9").replace("M", "e6"))
@@ -1830,7 +1843,6 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 except (ValueError, TypeError):
                     pass
 
-            # Stablecoin Market Cap
             if _has(stbl_mcap):
                 try:
                     sm = float(str(stbl_mcap).replace("$", "").replace(",", "").replace("B", "e9").replace("T", "e12"))
@@ -2004,6 +2016,211 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     funding_conflict = _clean(d.get("funding_conflict", ""))
     if funding_conflict:
         lines.append(f"ℹ️ {html_lib.escape(funding_conflict)}")
+
+    # ══════════════════════════════════════════════════════════════
+    # PRO-АНАЛИТИКА (AI Engine — только в Pro)
+    # ══════════════════════════════════════════════════════════════
+
+    # ── AI PRESSURE INDEX (PRO) ──
+    # Комбинирует funding + CVD + OI + liquidations + whales в один индекс
+    if is_pro:
+        _pressure_signals = []  # (direction, weight) — direction: 1=bullish, -1=bearish
+        _pressure_reasons_ru = []
+        _pressure_reasons_en = []
+
+        # 1. Funding
+        try:
+            _fr = float(str(d.get("funding_rate", "0")).replace("%", "").replace("+", ""))
+            if _fr > 0.01:
+                _pressure_signals.append((-1, 1.5))  # лонги платят = перегрузка = bearish
+                _pressure_reasons_ru.append("фандинг: лонги перегружены")
+                _pressure_reasons_en.append("funding: longs overloaded")
+            elif _fr < -0.005:
+                _pressure_signals.append((1, 1.5))
+                _pressure_reasons_ru.append("фандинг: шорты платят")
+                _pressure_reasons_en.append("funding: shorts paying")
+        except (ValueError, TypeError):
+            pass
+
+        # 2. CVD
+        try:
+            _cv = float(str(d.get("cvd_value", "0")))
+            if _cv > 0.5:
+                _pressure_signals.append((1, 1.0))
+                _pressure_reasons_ru.append("CVD: покупатели давят")
+                _pressure_reasons_en.append("CVD: buyers dominate")
+            elif _cv < -0.5:
+                _pressure_signals.append((-1, 1.0))
+                _pressure_reasons_ru.append("CVD: продавцы давят")
+                _pressure_reasons_en.append("CVD: sellers dominate")
+        except (ValueError, TypeError):
+            pass
+
+        # 3. OI change
+        try:
+            _oi = float(str(d.get("oi_change", "0")).replace("%", "").replace("+", ""))
+            if _oi > 1.0:
+                _pressure_signals.append((1, 0.8))
+                _pressure_reasons_ru.append("OI растёт: новые позиции")
+                _pressure_reasons_en.append("OI rising: new positions")
+            elif _oi < -1.0:
+                _pressure_signals.append((-1, 0.8))
+                _pressure_reasons_ru.append("OI падает: закрытие позиций")
+                _pressure_reasons_en.append("OI falling: positions closing")
+        except (ValueError, TypeError):
+            pass
+
+        # 4. Liquidations
+        try:
+            _lu = float(str(d.get("liq_up", "0")).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
+            _ld = float(str(d.get("liq_dn", "0")).replace("$", "").replace(",", "").replace("K", "e3").replace("M", "e6"))
+            if _lu + _ld > 0:
+                _liq_ratio = _lu / (_lu + _ld)
+                if _liq_ratio > 0.6:
+                    _pressure_signals.append((1, 1.2))
+                    _pressure_reasons_ru.append("ликвидации: шортов больше")
+                    _pressure_reasons_en.append("liquidations: more shorts")
+                elif _liq_ratio < 0.4:
+                    _pressure_signals.append((-1, 1.2))
+                    _pressure_reasons_ru.append("ликвидации: лонгов больше")
+                    _pressure_reasons_en.append("liquidations: more longs")
+        except (ValueError, TypeError):
+            pass
+
+        # 5. Whales
+        _wd = d.get("whale_direction", "")
+        if _wd == "bullish":
+            _pressure_signals.append((1, 1.5))
+            _pressure_reasons_ru.append("киты: выводят с бирж")
+            _pressure_reasons_en.append("whales: withdrawing from exchanges")
+        elif _wd == "bearish":
+            _pressure_signals.append((-1, 1.5))
+            _pressure_reasons_ru.append("киты: заводят на биржи")
+            _pressure_reasons_en.append("whales: depositing to exchanges")
+
+        # Считаем итоговый индекс
+        if _pressure_signals:
+            _total_weight = sum(w for _, w in _pressure_signals)
+            _weighted_sum = sum(d_ * w for d_, w in _pressure_signals)
+            if _total_weight > 0:
+                _raw_score = _weighted_sum / _total_weight  # от -1 до 1
+                _bull_pct = int(50 + _raw_score * 50)  # от 0 до 100
+                _bull_pct = max(5, min(95, _bull_pct))
+                _bear_pct = 100 - _bull_pct
+
+                lines.append("")
+                _api_title = "── AI PRESSURE INDEX (PRO) ──" if lang == "ru" else "── AI PRESSURE INDEX (PRO) ──"
+                lines.append(_api_title)
+
+                _bull_blocks = round(_bull_pct / 10)
+                _bear_blocks = 10 - _bull_blocks
+                _bull_bar = "█" * _bull_blocks + "░" * _bear_blocks
+                _bear_bar = "█" * _bear_blocks + "░" * _bull_blocks
+
+                lines.append(f"<code>BULL {_bull_bar} {_bull_pct}%</code>")
+                lines.append(f"<code>BEAR {_bear_bar} {_bear_pct}%</code>")
+
+                # Топ причины
+                _reasons = _pressure_reasons_ru if lang == "ru" else _pressure_reasons_en
+                if _reasons:
+                    lines.append(f"→ {' · '.join(_reasons[:3])}")
+
+    # ── PRE-MOVE DETECTOR (PRO) ──
+    # Если OI spike + volume/funding shift + цена почти стоит = движение готовится
+    if is_pro:
+        _premove_flags = []
+        _premove_hints_ru = []
+        _premove_hints_en = []
+        try:
+            _price_chg = abs(float(str(change).replace("%", "").replace("+", "").replace("−", "-").replace("–", "-")))
+            _oi_chg_val = abs(float(str(d.get("oi_change", "0")).replace("%", "").replace("+", "")))
+            _fr_abs = abs(float(str(d.get("funding_rate", "0")).replace("%", "").replace("+", "")))
+
+            # Цена почти стоит но OI растёт
+            if _price_chg < 1.0 and _oi_chg_val > 2.0:
+                _premove_flags.append("oi_spike")
+                _premove_hints_ru.append(f"OI: +{_oi_chg_val:.1f}% при цене {_price_chg:.1f}%")
+                _premove_hints_en.append(f"OI: +{_oi_chg_val:.1f}% while price {_price_chg:.1f}%")
+
+            # Funding перегружен
+            if _fr_abs > 0.03:
+                _premove_flags.append("funding_extreme")
+                _premove_hints_ru.append(f"фандинг экстремальный: {d.get('funding_rate', '')}")
+                _premove_hints_en.append(f"extreme funding: {d.get('funding_rate', '')}")
+
+            # CVD сменил направление при плоской цене
+            _cv_val = float(str(d.get("cvd_value", "0")))
+            if _price_chg < 1.0 and abs(_cv_val) > 2.0:
+                _premove_flags.append("cvd_divergence")
+                _dir = "покупатели" if _cv_val > 0 else "продавцы"
+                _dir_en = "buyers" if _cv_val > 0 else "sellers"
+                _premove_hints_ru.append(f"CVD: {_dir} давят, цена стоит")
+                _premove_hints_en.append(f"CVD: {_dir_en} pressing, price flat")
+
+        except (ValueError, TypeError):
+            pass
+
+        if len(_premove_flags) >= 2:
+            lines.append("")
+            _pm_title = "── ⚡ EARLY SIGNAL (PRO) ──" if lang == "ru" else "── ⚡ EARLY SIGNAL (PRO) ──"
+            lines.append(_pm_title)
+            _pm_label = "движение готовится" if lang == "ru" else "move building"
+            lines.append(f"🔮 <b>PRE-MOVE: {_pm_label}</b>")
+            _hints = _premove_hints_ru if lang == "ru" else _premove_hints_en
+            for h in _hints:
+                lines.append(f"  → {h}")
+            # Направление из pressure
+            if _pressure_signals:
+                _ws = sum(d_ * w for d_, w in _pressure_signals)
+                if _ws > 0.3:
+                    _pm_dir = "вероятен рост (long squeeze шортов)" if lang == "ru" else "likely up (short squeeze)"
+                elif _ws < -0.3:
+                    _pm_dir = "вероятно падение (слив лонгов)" if lang == "ru" else "likely down (long liquidation)"
+                else:
+                    _pm_dir = "направление неясно" if lang == "ru" else "direction unclear"
+                lines.append(f"  ⚡ {_pm_dir}")
+
+    # ── MARKET REGIME (PRO) ──
+    if is_pro:
+        try:
+            _rsi = float(d.get("rsi", "50"))
+            _price_chg_regime = abs(float(str(change).replace("%", "").replace("+", "").replace("−", "-").replace("–", "-")))
+
+            # Определяем режим рынка
+            if _rsi > 65 or _rsi < 35:
+                if _price_chg_regime > 3:
+                    _regime = "TRENDING + HIGH VOL"
+                    _regime_icon = "🔥"
+                    _regime_hint_ru = "сильный тренд с высокой волатильностью"
+                    _regime_hint_en = "strong trend with high volatility"
+                else:
+                    _regime = "TRENDING"
+                    _regime_icon = "📈" if _rsi > 65 else "📉"
+                    _regime_hint_ru = "трендовый рынок"
+                    _regime_hint_en = "trending market"
+            elif _price_chg_regime > 4:
+                _regime = "HIGH VOLATILITY"
+                _regime_icon = "⚡"
+                _regime_hint_ru = "высокая волатильность — осторожно"
+                _regime_hint_en = "high volatility — caution"
+            elif _price_chg_regime < 0.5 and 45 < _rsi < 55:
+                _regime = "RANGE / SIDEWAYS"
+                _regime_icon = "😴"
+                _regime_hint_ru = "боковик — рынок спит"
+                _regime_hint_en = "sideways — market sleeping"
+            else:
+                _regime = "NORMAL"
+                _regime_icon = "🟢"
+                _regime_hint_ru = "нормальный режим"
+                _regime_hint_en = "normal mode"
+
+            lines.append("")
+            _mr_title = "── MARKET REGIME (PRO) ──" if lang == "ru" else "── MARKET REGIME (PRO) ──"
+            lines.append(_mr_title)
+            _hint = _regime_hint_ru if lang == "ru" else _regime_hint_en
+            lines.append(f"{_regime_icon} <b>{_regime}</b> — {_hint}")
+        except (ValueError, TypeError):
+            pass
 
     # ── PRO: полный LLM-анализ ──
     if is_pro and llm_text:
@@ -2367,7 +2584,9 @@ async def cb_coin(call: CallbackQuery):
         page = idx // COINS_PER_PAGE
     except ValueError:
         page = 0
-    data = await db.get_market_data([coin])
+    # Pro: загружаем и BTC для глобальных макро-данных
+    coins_to_load = [coin] if (coin == "BTC" or view_mode != "pro") else [coin, "BTC"]
+    data = await db.get_market_data(coins_to_load)
     await call.message.edit_text(
         text_coin_analysis(coin, data, lang, view_mode=view_mode),
         parse_mode=ParseMode.HTML,
@@ -2408,7 +2627,8 @@ async def cb_viewmode(call: CallbackQuery):
         page = idx // COINS_PER_PAGE
     except ValueError:
         page = 0
-    data = await db.get_market_data([coin])
+    coins_to_load = [coin] if (coin == "BTC" or new_mode != "pro") else [coin, "BTC"]
+    data = await db.get_market_data(coins_to_load)
     await call.message.edit_text(
         text_coin_analysis(coin, data, lang, view_mode=new_mode),
         parse_mode=ParseMode.HTML,
