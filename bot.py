@@ -1334,13 +1334,13 @@ def _calc_coin_pressure(d: dict) -> dict:
     except (ValueError, TypeError):
         _price_chg = 0
 
-    # Squeeze detection
-    if _fr_val < -0.01 and _bull_pct > 60:
+    # Squeeze detection (ужесточено — нужно более экстремальное значение)
+    if _fr_val < -0.02 and _bull_pct > 65:
         signal_type = "squeeze"
         signal_icon = "🧨"
         reason_ru = "short squeeze"
         reason_en = "short squeeze"
-    elif _fr_val > 0.02 and _bear_pct > 60:
+    elif _fr_val > 0.04 and _bear_pct > 65:
         signal_type = "dump_risk"
         signal_icon = "⚠️"
         reason_ru = "dump risk"

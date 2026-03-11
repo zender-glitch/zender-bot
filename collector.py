@@ -2802,29 +2802,43 @@ def calculate_market_state(coin_data: dict, direction: dict) -> dict:
     liq_short = coin_data.get("liq_short")
     change = coin_data.get("change_24h")
 
-    # Short squeeze: шорты переплачивают + шортов ликвидируют + страх
+    # Short squeeze: нужна КОМБИНАЦИЯ факторов (ужесточено — раньше срабатывало слишком часто)
     is_short_squeeze = False
-    if fr is not None and fr < -0.005:
-        if liq_short and liq_long:
-            try:
-                if float(liq_short) > float(liq_long) * 1.5:
-                    is_short_squeeze = True
-            except (ValueError, TypeError):
-                pass
-        if fg is not None and fg < 40:
-            is_short_squeeze = True
+    _ss_signals = 0
+    if fr is not None and fr < -0.01:
+        _ss_signals += 1
+    if fg is not None and fg < 25:
+        _ss_signals += 1
+    if liq_short and liq_long:
+        try:
+            if float(liq_short) > float(liq_long) * 2.0:
+                _ss_signals += 1
+        except (ValueError, TypeError):
+            pass
+    if bitget_acc_l is not None and bitget_acc_l < 30:
+        _ss_signals += 1
+    # Нужно минимум 3 из 4 факторов
+    if _ss_signals >= 3:
+        is_short_squeeze = True
 
-    # Long squeeze: лонги переплачивают + лонгов ликвидируют + жадность
+    # Long squeeze: нужна КОМБИНАЦИЯ факторов (ужесточено)
     is_long_squeeze = False
-    if fr is not None and fr > 0.03:
-        if liq_long and liq_short:
-            try:
-                if float(liq_long) > float(liq_short) * 1.5:
-                    is_long_squeeze = True
-            except (ValueError, TypeError):
-                pass
-        if fg is not None and fg > 65:
-            is_long_squeeze = True
+    _ls_signals = 0
+    if fr is not None and fr > 0.05:
+        _ls_signals += 1
+    if fg is not None and fg > 75:
+        _ls_signals += 1
+    if liq_long and liq_short:
+        try:
+            if float(liq_long) > float(liq_short) * 2.0:
+                _ls_signals += 1
+        except (ValueError, TypeError):
+            pass
+    if bitget_acc_l is not None and bitget_acc_l > 70:
+        _ls_signals += 1
+    # Нужно минимум 3 из 4 факторов
+    if _ls_signals >= 3:
+        is_long_squeeze = True
 
     # Перегруз лонгов (толпа в лонгах + опасные признаки)
     crowd_long_overload = (bitget_acc_l is not None and bitget_acc_l > 70)
@@ -2871,11 +2885,11 @@ def calculate_market_state(coin_data: dict, direction: dict) -> dict:
         state = "NEUTRAL"
         state_label = "боковик"
 
-    # Определяем ловушку
+    # Определяем ловушку (только при реальном squeeze, crowd_overload сам по себе не триггерит)
     trap = "нет"
-    if is_short_squeeze or (crowd_short_overload and dir_code == "UP"):
+    if is_short_squeeze:
         trap = "шорты в ловушке"
-    elif is_long_squeeze or (crowd_long_overload and dir_code == "DOWN"):
+    elif is_long_squeeze:
         trap = "лонги в ловушке"
 
     return {
