@@ -1823,7 +1823,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             # Глобальные: ETF, DeFi, Stablecoins (для всех монет)
             if _has(etf_flow):
                 try:
-                    ef = float(str(etf_flow).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
+                    ef = float(str(etf_flow).replace("$", "").replace(",", "").replace(" млрд", "e9").replace("млрд", "e9").replace("M", "e6").replace("B", "e9"))
                     _ef_sign = "+" if ef > 0 else ""
                     if ef > 0:
                         _ef_hint = "деньги заходят" if lang == "ru" else "inflow"
@@ -1835,7 +1835,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
 
             if _has(defi_tvl):
                 try:
-                    tvl = float(str(defi_tvl).replace("$", "").replace(",", "").replace("B", "e9").replace("M", "e6"))
+                    tvl = float(str(defi_tvl).replace("$", "").replace(",", "").replace(" млрд", "e9").replace("млрд", "e9").replace("B", "e9").replace("M", "e6"))
                     tvl_line = f"🔗 DeFi TVL: <b>${tvl/1e9:.1f}B</b>"
                     if _has(defi_tvl_chg):
                         tvl_line += f" ({defi_tvl_chg})"
@@ -1845,7 +1845,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
 
             if _has(stbl_mcap):
                 try:
-                    sm = float(str(stbl_mcap).replace("$", "").replace(",", "").replace("B", "e9").replace("T", "e12"))
+                    sm = float(str(stbl_mcap).replace("$", "").replace(",", "").replace(" млрд", "e9").replace("млрд", "e9").replace("B", "e9").replace("T", "e12"))
                     lines.append(f"💵 Stablecoins: <b>${sm/1e9:.0f}B</b>")
                 except (ValueError, TypeError):
                     pass
