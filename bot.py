@@ -2200,7 +2200,18 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 if _has(kraken_fr):
                     _kr_parts.append(f"funding <b>{kraken_fr}</b>")
                 if _has(kraken_oi_val):
-                    _kr_parts.append(f"OI <b>{kraken_oi_val}</b>")
+                    try:
+                        _koi = float(str(kraken_oi_val).replace("$", "").replace(",", ""))
+                        if _koi >= 1e9:
+                            _kr_parts.append(f"OI <b>${_koi/1e9:.2f}B</b>")
+                        elif _koi >= 1e6:
+                            _kr_parts.append(f"OI <b>${_koi/1e6:.1f}M</b>")
+                        elif _koi >= 1e3:
+                            _kr_parts.append(f"OI <b>${_koi/1e3:.0f}K</b>")
+                        else:
+                            _kr_parts.append(f"OI <b>{kraken_oi_val}</b>")
+                    except (ValueError, TypeError):
+                        _kr_parts.append(f"OI <b>{kraken_oi_val}</b>")
                 lines.append(f"🦑 Kraken: {' · '.join(_kr_parts)}")
 
             # dYdX
@@ -2915,8 +2926,9 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             _weighted_sum = sum(d_ * w for d_, w in _pressure_signals)
             if _total_weight > 0:
                 _raw_score = _weighted_sum / _total_weight  # от -1 до 1
-                _engine_bull_pct = int(50 + _raw_score * 50)  # от 0 до 100
-                _engine_bull_pct = max(5, min(95, _engine_bull_pct))
+                # Сжатая шкала: max ~80% для сильного сигнала (трейдеры доверяют)
+                _engine_bull_pct = int(50 + _raw_score * 30)
+                _engine_bull_pct = max(15, min(85, _engine_bull_pct))
                 _engine_bear_pct = 100 - _engine_bull_pct
 
                 lines.append("")

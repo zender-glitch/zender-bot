@@ -3196,26 +3196,30 @@ def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict
         trap_display = "лонги в ловушке — возможно падение (long squeeze)"
 
     # ── ВЕРОЯТНОСТЬ ДВИЖЕНИЯ (на основе bull/bear факторов) ──
+    # Сжатая шкала: max ~80% даже при единогласных факторах
+    # Чтобы трейдеры доверяли — экстремальные значения очень редкие
     if total > 0:
-        prob_bull = round((dir_bull / total) * 100)
+        _raw_ratio = dir_bull / total  # 0..1
+        prob_bull = round(50 + (_raw_ratio - 0.5) * 60)  # 20..80 для 0..1
+        prob_bull = max(15, min(85, prob_bull))
         prob_bear = 100 - prob_bull
     else:
         prob_bull = 50
         prob_bear = 50
 
-    # Корректируем по качеству сетапа
+    # Корректируем по качеству сетапа (макс boost ±5)
     if quality == "STRONG":
-        boost = 10
-    elif quality == "MEDIUM":
         boost = 5
+    elif quality == "MEDIUM":
+        boost = 3
     else:
         boost = 0
 
     if dir_code == "UP":
-        prob_bull = min(95, prob_bull + boost)
+        prob_bull = min(85, prob_bull + boost)
         prob_bear = 100 - prob_bull
     elif dir_code == "DOWN":
-        prob_bear = min(95, prob_bear + boost)
+        prob_bear = min(85, prob_bear + boost)
         prob_bull = 100 - prob_bear
 
     # ── КОНФЛИКТ FUNDING vs СИГНАЛ ──
@@ -3836,6 +3840,7 @@ async def collect_all():
                 "top_factors_bull": top_factors_bull,
                 "top_factors_bear": top_factors_bear,
                 "recommendation": llm_data.get("recommendation", ""),
+                "signal_reason": llm_data.get("signal_reason", ""),
                 "strength": llm_data.get("strength", ""),
                 "entry": llm_data.get("entry", ""),
                 "stop": llm_data.get("stop", ""),
