@@ -1839,6 +1839,7 @@ KRAKEN_FUTURES_SYMBOLS = {
     "LINK": "PF_LINKUSD",
     "LTC": "PF_LTCUSD",
     "ATOM": "PF_ATOMUSD",
+    "RUNE": "PF_RUNEUSD",
     # BNB, AVAX, POL, TRX, SHIB, UNI, NEAR, APT, ARB, OP — нет на Kraken Futures
 }
 

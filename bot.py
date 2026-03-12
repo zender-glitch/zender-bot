@@ -2160,21 +2160,33 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 except (ValueError, TypeError):
                     pass
 
-            # Bitget позиции
+            # Bitget позиции + OI
+            _has_bg_ls = False
             if _has(bg_long_pos) and _has(bg_short_pos):
                 try:
                     bl = float(str(bg_long_pos).replace("%", ""))
                     bs = float(str(bg_short_pos).replace("%", ""))
                     lines.append(f"🔶 Bitget: <b>{bl:.0f}%</b>L / <b>{bs:.0f}%</b>S")
+                    _has_bg_ls = True
                 except (ValueError, TypeError):
                     pass
             if _has(bg_oi):
                 try:
                     boi = float(str(bg_oi).replace("$", "").replace(",", ""))
+                    _oi_str = ""
                     if boi >= 1e9:
-                        lines.append(f"  OI: <b>${boi/1e9:.2f}B</b>")
+                        _oi_str = f"${boi/1e9:.2f}B"
                     elif boi >= 1e6:
-                        lines.append(f"  OI: <b>${boi/1e6:.1f}M</b>")
+                        _oi_str = f"${boi/1e6:.1f}M"
+                    elif boi >= 1e3:
+                        _oi_str = f"${boi/1e3:.0f}K"
+                    elif boi > 0:
+                        _oi_str = f"${boi:,.0f}"
+                    if _oi_str:
+                        if _has_bg_ls:
+                            lines.append(f"  OI: <b>{_oi_str}</b>")
+                        else:
+                            lines.append(f"🔶 Bitget: OI <b>{_oi_str}</b>")
                 except (ValueError, TypeError):
                     pass
 
