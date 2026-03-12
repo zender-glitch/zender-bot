@@ -1134,7 +1134,7 @@ BINANCE_FUTURES_MAP = {
     "LINK": "LINKUSDT",
     "POL": "POLUSDT",
     "TRX": "TRXUSDT",
-    "SHIB": "SHIBUSDT",
+    "SHIB": "1000SHIBUSDT",
     "UNI": "UNIUSDT",
     "LTC": "LTCUSDT",
     "ATOM": "ATOMUSDT",
@@ -1726,8 +1726,9 @@ CROSS_EXCHANGE_CACHE = {}
 CROSS_EXCHANGE_TTL = 15 * 60  # 15 минут
 
 
-# Пары которые поддерживают L/S на Bitget (BNB, AVAX — не поддерживаются)
-BITGET_LS_SUPPORTED = {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "DOT", "LINK", "AVAX", "POL", "UNI", "LTC", "ATOM", "NEAR", "APT", "ARB", "OP", "RUNE"}
+# Bitget L/S ratio: только монеты которые реально возвращают данные (200 OK).
+# Остальные (DOT, LINK, AVAX, POL, UNI, LTC, ATOM, NEAR, APT, ARB, OP, RUNE) → 400 Bad Request.
+BITGET_LS_SUPPORTED = {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "BNB"}
 
 
 async def fetch_bitget_ls(symbol: str) -> dict:

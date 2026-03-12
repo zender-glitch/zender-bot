@@ -1175,12 +1175,11 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
         else:
             sig = "⚪HOLD"
 
-        # Моноширинная строка — компактная для iPhone
-        # BTC  $69,577 -1.80%  🟢BUY
-        _coin_s = f"{coin:<5}"
+        # Тикер как команда /BTC — кликабельный вход в карточку
+        # /BTC  $69,577 -1.80%  🟢BUY
         _price_s = f"{price:>8}"
         _chg_s = f"{change:>7}"
-        lines.append(f"<code>{_coin_s}{_price_s} {_chg_s}</code> {sig}")
+        lines.append(f"/{coin}  <code>{_price_s} {_chg_s}</code> {sig}")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
@@ -3431,6 +3430,32 @@ async def cmd_summary(message: Message):
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
         reply_markup=kb_radar(page=0, lang=lang, data=data)
+    )
+
+
+# Команды-тикеры: /BTC, /ETH, /RUNE и т.д. — быстрый вход в карточку монеты
+@dp.message(Command(*[c.lower() for c in COINS]))
+async def cmd_coin_shortcut(message: Message):
+    """Быстрый вход в карточку монеты по команде /BTC, /ETH и т.д."""
+    lang = await get_user_lang(message.from_user.id)
+    view_mode = await db.get_view_mode(message.from_user.id)
+    # Извлекаем тикер из команды: /btc → BTC, /rune → RUNE
+    coin = message.text.strip("/").split()[0].upper()
+    if coin not in COINS:
+        return
+    # Определяем страницу этой монеты
+    try:
+        idx = COINS.index(coin)
+        page = idx // COINS_PER_PAGE
+    except ValueError:
+        page = 0
+    coins_to_load = [coin] if (coin == "BTC" or view_mode != "pro") else [coin, "BTC"]
+    data = await db.get_market_data(coins_to_load)
+    await message.answer(
+        text_coin_analysis(coin, data, lang, view_mode=view_mode),
+        parse_mode=ParseMode.HTML,
+        link_preview_options=NO_PREVIEW,
+        reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode, data=data)
     )
 
 
