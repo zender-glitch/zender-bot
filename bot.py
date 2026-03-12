@@ -1316,8 +1316,10 @@ def _calc_coin_pressure(d: dict) -> dict:
     _total_weight = sum(w for _, w in signals)
     _weighted_sum = sum(d_ * w for d_, w in signals)
     _raw_score = _weighted_sum / _total_weight if _total_weight > 0 else 0
-    _bull_pct = int(50 + _raw_score * 50)
-    _bull_pct = max(5, min(95, _bull_pct))
+    # Сжатая шкала: max ~80% для сильного сигнала (вместо 95%)
+    # Чтобы трейдеры доверяли — экстремальные значения только при ОЧЕНЬ сильном сетапе
+    _bull_pct = int(50 + _raw_score * 30)
+    _bull_pct = max(15, min(85, _bull_pct))
     _bear_pct = 100 - _bull_pct
 
     # Определяем тип сигнала
@@ -1909,9 +1911,12 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             pass
 
     sig_part = ""
+    signal_reason = _clean(d.get("signal_reason", ""))
     if recommendation:
         _sig_title = "SIGNAL" if lang == "en" else "СИГНАЛ"
         sig_part = f"{rec_icon} {_sig_title}: <b>{rec_label}</b>"
+        if signal_reason:
+            sig_part += f"\n→ {signal_reason}"
 
     conf_part = ""
     if is_pro:
@@ -2344,9 +2349,18 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         if has_cvd:
             try:
                 cv = float(cvd_val)
-                _trend_icon = "📈" if cvd_trend == "rising" else "📉"
-                _cvd_hint_ru = "покупатели давят" if cv > 0 else "продавцы давят"
-                _cvd_hint_en = "buyers dominate" if cv > 0 else "sellers dominate"
+                if abs(cv) < 0.1:
+                    _trend_icon = "➖"
+                    _cvd_hint_ru = "нейтрально"
+                    _cvd_hint_en = "neutral"
+                elif cv > 0:
+                    _trend_icon = "📈"
+                    _cvd_hint_ru = "покупатели давят" if cv > 1.0 else "покупатели активны"
+                    _cvd_hint_en = "buyers dominate" if cv > 1.0 else "buyers active"
+                else:
+                    _trend_icon = "📉"
+                    _cvd_hint_ru = "продавцы давят" if cv < -1.0 else "продавцы активны"
+                    _cvd_hint_en = "sellers dominate" if cv < -1.0 else "sellers active"
                 _cvd_hint = _cvd_hint_ru if lang == "ru" else _cvd_hint_en
                 lines.append(f"{_trend_icon} CVD (1ч): <b>{cv:+.1f}M</b>")
                 lines.append(f"→ {_cvd_hint}")

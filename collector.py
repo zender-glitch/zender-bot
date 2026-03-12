@@ -2506,6 +2506,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
     state_label = p.get("state_label", "?")
     quality_label = p.get("quality_label", "?")
     pre_recommendation = p.get("recommendation", "выжидать")
+    pre_signal_reason = p.get("signal_reason", "")
     pre_strength = p.get("strength", "слабо")
     pre_trap = p.get("trap", "нет")
     pre_trap_display = p.get("trap_display", pre_trap)
@@ -2638,6 +2639,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
 
             # Pipeline данные — rule-based (НЕ из LLM!)
             result["recommendation"] = pre_recommendation
+            result["signal_reason"] = pre_signal_reason
             result["strength"] = pre_strength
             result["trap"] = pre_trap if pre_trap != "нет" else ""
             result["trap_display"] = pre_trap_display if pre_trap_display != "нет" else ""
@@ -2658,6 +2660,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
         # Даже без LLM — возвращаем pipeline данные
         return {
             "recommendation": pre_recommendation,
+            "signal_reason": pre_signal_reason,
             "strength": pre_strength,
             "trap": pre_trap if pre_trap != "нет" else "",
             "trap_display": pre_trap_display if pre_trap_display != "нет" else "",
@@ -3131,12 +3134,26 @@ def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict
     conf_bars = "🟩" * conf_level + "⬜" * (5 - conf_level)
 
     # ── СИГНАЛ (направление + сила) ──
+    signal_reason = ""
     if dir_code == "UP" and quality in ("STRONG", "MEDIUM"):
         recommendation = "покупать"
+        signal_reason = "бычий тренд + хороший сетап" if quality == "STRONG" else "бычий тренд"
     elif dir_code == "DOWN" and quality in ("STRONG", "MEDIUM"):
         recommendation = "продавать"
+        signal_reason = "медвежий тренд + хороший сетап" if quality == "STRONG" else "медвежий тренд"
     else:
         recommendation = "выжидать"
+        # Объясняем ПОЧЕМУ выжидать
+        if dir_code == "SIDEWAYS":
+            signal_reason = "нет выраженного тренда"
+        elif quality in ("WEAK", "POOR") and conflicts:
+            signal_reason = conflicts[0]  # главный конфликт
+        elif dir_code == "UP" and quality in ("WEAK", "POOR"):
+            signal_reason = "бычье давление, но слабый сетап"
+        elif dir_code == "DOWN" and quality in ("WEAK", "POOR"):
+            signal_reason = "медвежье давление, но слабый сетап"
+        else:
+            signal_reason = "сигналы конфликтуют"
 
     # Сила сигнала
     if quality == "STRONG":
@@ -3219,6 +3236,7 @@ def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict
         "confidence_bar": conf_bars,
         "confidence_label": conf_label,
         "recommendation": recommendation,
+        "signal_reason": signal_reason,
         "strength": strength,
         "signal_bar": signal_bar,
         "signal_label": signal_label,
