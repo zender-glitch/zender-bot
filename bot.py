@@ -2003,9 +2003,14 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 lines.append(t("trend_up", lang))
             else:
                 lines.append(t("trend_down", lang))
-            # PRO: точные значения SMA
+            # PRO: точные значения SMA (умное форматирование для дешёвых монет)
             if is_pro:
-                lines.append(f"  SMA50: <b>${s50:,.0f}</b> · SMA200: <b>${s200:,.0f}</b>")
+                def _fmt_sma(v):
+                    if v >= 1000: return f"${v:,.0f}"
+                    elif v >= 1: return f"${v:.2f}"
+                    elif v >= 0.01: return f"${v:.4f}"
+                    else: return f"${v:.6f}"
+                lines.append(f"  SMA50: <b>{_fmt_sma(s50)}</b> · SMA200: <b>{_fmt_sma(s200)}</b>")
         except (ValueError, TypeError):
             pass
 
@@ -2219,8 +2224,12 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             lines.append(_ob_title)
             _bid_lbl = "Bid liquidity" if lang == "en" else "Bid ликвидность"
             _ask_lbl = "Ask liquidity" if lang == "en" else "Ask ликвидность"
-            lines.append(f"🟢 {_bid_lbl}: <b>${_bd_val/1e6:.1f}M</b>")
-            lines.append(f"🔴 {_ask_lbl}: <b>${_ad_val/1e6:.1f}M</b>")
+            def _fmt_depth(v):
+                if v >= 1e6: return f"${v/1e6:.1f}M"
+                elif v >= 1e3: return f"${v/1e3:.0f}K"
+                else: return f"${v:.0f}"
+            lines.append(f"🟢 {_bid_lbl}: <b>{_fmt_depth(_bd_val)}</b>")
+            lines.append(f"🔴 {_ask_lbl}: <b>{_fmt_depth(_ad_val)}</b>")
             if _bd_val > _ad_val * 1.3:
                 _ob_hint = "стена покупок — поддержка сильнее" if lang == "ru" else "bid wall — support is stronger"
             elif _ad_val > _bd_val * 1.3:
@@ -2359,10 +2368,19 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 rv = float(obi_res_vol) if _has(obi_res_vol) else 0
                 _wall_label = "Buy wall" if lang == "en" else "Стена покупок"
                 _rwall_label = "Sell wall" if lang == "en" else "Стена продаж"
+                def _fmt_wall_price(v):
+                    if v >= 1000: return f"${v:,.0f}"
+                    elif v >= 1: return f"${v:.2f}"
+                    elif v >= 0.01: return f"${v:.4f}"
+                    else: return f"${v:.6f}"
+                def _fmt_wall_vol(v):
+                    if v >= 1e6: return f"${v/1e6:.1f}M"
+                    elif v >= 1e3: return f"${v/1e3:.0f}K"
+                    else: return f"${v:.0f}"
                 if sv > 0:
-                    lines.append(f"🟩 {_wall_label}: <b>${sp:,.0f}</b> (<b>${sv/1e6:.1f}M</b>)")
+                    lines.append(f"🟩 {_wall_label}: <b>{_fmt_wall_price(sp)}</b> (<b>{_fmt_wall_vol(sv)}</b>)")
                 if rv > 0:
-                    lines.append(f"🟥 {_rwall_label}: <b>${rp:,.0f}</b> (<b>${rv/1e6:.1f}M</b>)")
+                    lines.append(f"🟥 {_rwall_label}: <b>{_fmt_wall_price(rp)}</b> (<b>{_fmt_wall_vol(rv)}</b>)")
             except (ValueError, TypeError):
                 pass
 
@@ -2396,7 +2414,12 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 lines.append("")
                 _ms_title = "── СТРУКТУРА РЫНКА ──" if lang == "ru" else "── MARKET STRUCTURE ──"
                 lines.append(_ms_title)
-                lines.append(f"Spot: <b>${sv/1e9:.1f}B</b>  |  Perp: <b>${pv/1e9:.1f}B</b>")
+                def _fmt_vol(v):
+                    if v >= 1e9: return f"${v/1e9:.1f}B"
+                    elif v >= 1e6: return f"${v/1e6:.0f}M"
+                    elif v >= 1e3: return f"${v/1e3:.0f}K"
+                    else: return f"${v:.0f}"
+                lines.append(f"Spot: <b>{_fmt_vol(sv)}</b>  |  Perp: <b>{_fmt_vol(pv)}</b>")
                 if spot_pct >= 50:
                     _hint = "рост поддержан реальными покупками" if lang == "ru" else "growth supported by real buys"
                     lines.append(f"→ Spot Dominance: <b>{spot_pct}%</b>")
@@ -3074,44 +3097,49 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         eth_d = data.get("ETH", {})
         _btc_chg = _clean(btc_d.get("change", ""))
         _eth_chg = _clean(eth_d.get("change", ""))
+        # Фикс: "—" и пустые строки не считаются валидными
+        if not _has(_btc_chg): _btc_chg = ""
+        if not _has(_eth_chg): _eth_chg = ""
         if _btc_chg or _eth_chg:
             lines.append("")
-            _mc_title = "── MARKET CONTEXT (PRO) ──"
+            _mc_title = "── КОНТЕКСТ РЫНКА (PRO) ──" if lang == "ru" else "── MARKET CONTEXT (PRO) ──"
             lines.append(_mc_title)
             # BTC trend
             try:
                 _btc_rsi = float(btc_d.get("rsi", "50"))
                 if _btc_rsi > 60:
-                    _btc_trend = "bullish"
+                    _btc_trend = "бычий" if lang == "ru" else "bullish"
                 elif _btc_rsi < 40:
-                    _btc_trend = "bearish"
+                    _btc_trend = "медвежий" if lang == "ru" else "bearish"
                 else:
-                    _btc_trend = "neutral"
+                    _btc_trend = "нейтральный" if lang == "ru" else "neutral"
             except (ValueError, TypeError):
                 _btc_trend = "—"
-            lines.append(f"BTC trend: <b>{_btc_trend}</b> ({_btc_chg})")
+            _btc_suffix = f" ({_btc_chg})" if _btc_chg else ""
+            lines.append(f"BTC: <b>{_btc_trend}</b>{_btc_suffix}")
             # ETH trend
             if coin != "ETH":
                 try:
                     _eth_rsi = float(eth_d.get("rsi", "50"))
                     if _eth_rsi > 60:
-                        _eth_trend = "bullish"
+                        _eth_trend = "бычий" if lang == "ru" else "bullish"
                     elif _eth_rsi < 40:
-                        _eth_trend = "bearish"
+                        _eth_trend = "медвежий" if lang == "ru" else "bearish"
                     else:
-                        _eth_trend = "neutral"
+                        _eth_trend = "нейтральный" if lang == "ru" else "neutral"
                 except (ValueError, TypeError):
                     _eth_trend = "—"
-                lines.append(f"ETH trend: <b>{_eth_trend}</b> ({_eth_chg})")
+                _eth_suffix = f" ({_eth_chg})" if _eth_chg else ""
+                lines.append(f"ETH: <b>{_eth_trend}</b>{_eth_suffix}")
             # Alts strength (используем Fear & Greed)
             try:
                 _fg = int(float(str(d.get("fear_greed", "50"))))
                 if _fg > 60:
-                    _alt_str = "strong"
+                    _alt_str = "сильные" if lang == "ru" else "strong"
                 elif _fg > 40:
-                    _alt_str = "moderate"
+                    _alt_str = "умеренные" if lang == "ru" else "moderate"
                 else:
-                    _alt_str = "weak"
+                    _alt_str = "слабые" if lang == "ru" else "weak"
             except (ValueError, TypeError):
                 _alt_str = "—"
             _alt_lbl = "Alts strength" if lang == "en" else "Сила альтов"

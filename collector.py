@@ -3331,7 +3331,7 @@ def calculate_liquidation_levels(coin_data: dict) -> dict:
     liq_shorts_price = price * (1 + short_dist)   # выше цены — ликвидации шортов
     liq_longs_price = price * (1 - long_dist)      # ниже цены — ликвидации лонгов
 
-    # Округляем красиво
+    # Округляем красиво (с учётом дешёвых монет)
     if price > 10000:
         # BTC — до сотен
         liq_shorts_price = round(liq_shorts_price / 100) * 100
@@ -3340,10 +3340,18 @@ def calculate_liquidation_levels(coin_data: dict) -> dict:
         # ETH, BNB, SOL — до единиц
         liq_shorts_price = round(liq_shorts_price)
         liq_longs_price = round(liq_longs_price)
-    else:
-        # Мелкие — до десятых
+    elif price > 1:
+        # Средние монеты — до десятых
         liq_shorts_price = round(liq_shorts_price, 1)
         liq_longs_price = round(liq_longs_price, 1)
+    elif price > 0.01:
+        # Дешёвые (RUNE, DOGE, DOT) — до тысячных
+        liq_shorts_price = round(liq_shorts_price, 3)
+        liq_longs_price = round(liq_longs_price, 3)
+    else:
+        # Очень дешёвые (SHIB) — до 6 знаков
+        liq_shorts_price = round(liq_shorts_price, 6)
+        liq_longs_price = round(liq_longs_price, 6)
 
     return {
         "liq_level_shorts": liq_shorts_price,   # Уровень где ликвидируют шортов (выше)
