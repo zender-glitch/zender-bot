@@ -38,6 +38,7 @@ COINS = [
     "ADA", "DOGE", "AVAX", "DOT", "LINK",
     "POL", "TRX", "SHIB", "UNI", "LTC",
     "ATOM", "NEAR", "APT", "ARB", "OP",
+    "RUNE",
 ]
 
 # Монеты с опционными данными (Deribit)

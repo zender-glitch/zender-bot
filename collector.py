@@ -70,6 +70,7 @@ WHALE_ALERT_CURRENCIES = {
     "ADA": "ada", "DOGE": "doge", "AVAX": "avax", "DOT": "dot", "LINK": "link",
     "POL": "matic", "TRX": "trx", "SHIB": "shib", "UNI": "uni", "LTC": "ltc",
     "ATOM": "atom", "NEAR": "near", "APT": "apt", "ARB": "arb", "OP": "op",
+    "RUNE": "rune",
 }
 
 # Кэш whale данных — обновляем раз в 5 мин (коллектор цикл)
@@ -90,12 +91,13 @@ CG_HEADERS = {
     "Accept": "application/json",
 }
 
-# Монеты для сбора данных — ТОП-20 по капитализации
+# Монеты для сбора данных — ТОП-20 + альты
 COINS = [
     "BTC", "ETH", "BNB", "SOL", "XRP",
     "ADA", "DOGE", "AVAX", "DOT", "LINK",
     "POL", "TRX", "SHIB", "UNI", "LTC",
     "ATOM", "NEAR", "APT", "ARB", "OP",
+    "RUNE",
 ]
 
 # CoinGecko IDs
@@ -120,6 +122,7 @@ COINGECKO_IDS = {
     "APT": "aptos",
     "ARB": "arbitrum",
     "OP": "optimism",
+    "RUNE": "thorchain",
 }
 
 
@@ -261,6 +264,7 @@ BINANCE_SYMBOLS = {
     "DOT": "DOTUSDT", "LINK": "LINKUSDT", "POL": "POLUSDT", "TRX": "TRXUSDT",
     "SHIB": "SHIBUSDT", "UNI": "UNIUSDT", "LTC": "LTCUSDT", "ATOM": "ATOMUSDT",
     "NEAR": "NEARUSDT", "APT": "APTUSDT", "ARB": "ARBUSDT", "OP": "OPUSDT",
+    "RUNE": "RUNEUSDT",
 }
 
 
@@ -1138,6 +1142,7 @@ BINANCE_FUTURES_MAP = {
     "APT": "APTUSDT",
     "ARB": "ARBUSDT",
     "OP": "OPUSDT",
+    "RUNE": "RUNEUSDT",
 }
 
 
@@ -1349,6 +1354,7 @@ BINANCE_SPOT_MAP = {
     "DOT": "DOTUSDT", "LINK": "LINKUSDT", "POL": "POLUSDT", "TRX": "TRXUSDT",
     "SHIB": "SHIBUSDT", "UNI": "UNIUSDT", "LTC": "LTCUSDT", "ATOM": "ATOMUSDT",
     "NEAR": "NEARUSDT", "APT": "APTUSDT", "ARB": "ARBUSDT", "OP": "OPUSDT",
+    "RUNE": "RUNEUSDT",
 }
 
 
@@ -1686,6 +1692,7 @@ OKX_INSTRUMENTS = {
     "APT": "APT-USDT-SWAP",
     "ARB": "ARB-USDT-SWAP",
     "OP": "OP-USDT-SWAP",
+    "RUNE": "RUNE-USDT-SWAP",
 }
 
 
@@ -1705,31 +1712,49 @@ async def fetch_okx_top_traders(symbol: str) -> dict:
     result = {}
     inst_id = OKX_INSTRUMENTS[symbol]
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Попытка 1: Top Traders L/S ratio (contract)
             resp = await client.get(
                 "https://www.okx.com/api/v5/rubik/stat/contracts-long-short-account-ratio-contract-top-trader",
                 params={"instId": inst_id, "period": "1H"},
             )
             if resp.status_code != 200:
-                log.warning(f"OKX Top Traders {symbol}: HTTP {resp.status_code}")
-                return {}
+                log.warning(f"  ⚠️ OKX Top Traders {symbol}: HTTP {resp.status_code}")
+                # Попытка 2: обычный L/S ratio (все аккаунты, не только топ)
+                resp = await client.get(
+                    "https://www.okx.com/api/v5/rubik/stat/contracts-long-short-account-ratio",
+                    params={"instId": inst_id, "period": "1H"},
+                )
+                if resp.status_code != 200:
+                    log.warning(f"  ⚠️ OKX L/S fallback {symbol}: HTTP {resp.status_code}")
+                    return {}
+                log.info(f"  📊 OKX {symbol}: используем fallback (все аккаунты)")
             data = resp.json()
+            code = data.get("code", "?")
+            msg = data.get("msg", "")
             items = data.get("data", [])
-            if items:
-                # Берём самое свежее значение (первый элемент)
-                latest = items[0]
-                ratio_str = latest.get("ratio")
-                if ratio_str:
-                    ratio = float(ratio_str)
-                    # ratio = long accounts / short accounts
-                    # long% = ratio / (1 + ratio) * 100
-                    long_pct = ratio / (1 + ratio) * 100
-                    short_pct = 100 - long_pct
-                    result["okx_top_long"] = round(long_pct, 1)
-                    result["okx_top_short"] = round(short_pct, 1)
-                    log.info(f"  📊 OKX Top {symbol}: L={long_pct:.1f}% / S={short_pct:.1f}%")
+            if code != "0":
+                log.warning(f"  ⚠️ OKX Top {symbol}: code={code} msg={msg}")
+                return {}
+            if not items:
+                log.warning(f"  ⚠️ OKX Top {symbol}: пустой data[] (code={code})")
+                return {}
+            # Берём самое свежее значение (первый элемент)
+            latest = items[0]
+            ratio_str = latest.get("ratio")
+            if not ratio_str:
+                log.warning(f"  ⚠️ OKX Top {symbol}: нет ratio в ответе, keys={list(latest.keys())}")
+                return {}
+            ratio = float(ratio_str)
+            # ratio = long accounts / short accounts
+            # long% = ratio / (1 + ratio) * 100
+            long_pct = ratio / (1 + ratio) * 100
+            short_pct = 100 - long_pct
+            result["okx_top_long"] = round(long_pct, 1)
+            result["okx_top_short"] = round(short_pct, 1)
+            log.info(f"  📊 OKX Top {symbol}: L={long_pct:.1f}% / S={short_pct:.1f}%")
     except Exception as e:
-        log.warning(f"OKX Top Traders {symbol} error: {e}")
+        log.warning(f"  ⚠️ OKX Top Traders {symbol} error: {e}")
 
     if result:
         OKX_CACHE[cache_key] = {"data": result, "ts": time.time()}
@@ -1745,7 +1770,7 @@ CROSS_EXCHANGE_TTL = 15 * 60  # 15 минут
 
 
 # Пары которые поддерживают L/S на Bitget (BNB, AVAX — не поддерживаются)
-BITGET_LS_SUPPORTED = {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "DOT", "LINK", "AVAX", "POL", "UNI", "LTC", "ATOM", "NEAR", "APT", "ARB", "OP"}
+BITGET_LS_SUPPORTED = {"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "DOT", "LINK", "AVAX", "POL", "UNI", "LTC", "ATOM", "NEAR", "APT", "ARB", "OP", "RUNE"}
 
 
 async def fetch_bitget_ls(symbol: str) -> dict:
@@ -2006,6 +2031,7 @@ DYDX_SYMBOLS = {
     "APT": "APT-USD",
     "ARB": "ARB-USD",
     "OP": "OP-USD",
+    "RUNE": "RUNE-USD",
     # BNB не торгуется на dYdX
 }
 
