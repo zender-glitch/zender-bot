@@ -1176,10 +1176,11 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
             sig = "⚪HOLD"
 
         # Тикер как команда /BTC — кликабельный вход в карточку
-        # /BTC  $69,577 -1.80%  🟢BUY
-        _price_s = f"{price:>8}"
-        _chg_s = f"{change:>7}"
-        lines.append(f"/{coin}  <code>{_price_s} {_chg_s}</code> {sig}")
+        # Паддинг тикера до 4 символов: BTC→"BTC ", DOGE→"DOGE", OP→"OP  "
+        _coin_pad = f"{coin:<4}"
+        _price_s = f"{price:>10}"
+        _chg_s = f"{change:>8}"
+        lines.append(f"/{_coin_pad} <code>{_price_s} {_chg_s}</code> {sig}")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
@@ -3460,29 +3461,33 @@ async def cmd_summary(message: Message):
 
 
 # Команды-тикеры: /BTC, /ETH, /RUNE и т.д. — быстрый вход в карточку монеты
-@dp.message(Command(*[c.lower() for c in COINS]))
+@dp.message(F.text.regexp(r"^/([A-Za-z]{2,5})$"))
 async def cmd_coin_shortcut(message: Message):
     """Быстрый вход в карточку монеты по команде /BTC, /ETH и т.д."""
-    lang = await get_user_lang(message.from_user.id)
-    view_mode = await db.get_view_mode(message.from_user.id)
-    # Извлекаем тикер из команды: /btc → BTC, /rune → RUNE
-    coin = message.text.strip("/").split()[0].upper()
-    if coin not in COINS:
-        return
-    # Определяем страницу этой монеты
     try:
-        idx = COINS.index(coin)
-        page = idx // COINS_PER_PAGE
-    except ValueError:
-        page = 0
-    coins_to_load = [coin] if (coin == "BTC" or view_mode != "pro") else [coin, "BTC"]
-    data = await db.get_market_data(coins_to_load)
-    await message.answer(
-        text_coin_analysis(coin, data, lang, view_mode=view_mode),
-        parse_mode=ParseMode.HTML,
-        link_preview_options=NO_PREVIEW,
-        reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode, data=data)
-    )
+        # Извлекаем тикер из команды: /btc → BTC, /rune → RUNE
+        coin = message.text.strip("/").split()[0].upper()
+        if coin not in COINS:
+            return
+        lang = await get_user_lang(message.from_user.id)
+        view_mode = await db.get_view_mode(message.from_user.id)
+        # Определяем страницу этой монеты
+        try:
+            idx = COINS.index(coin)
+            page = idx // COINS_PER_PAGE
+        except ValueError:
+            page = 0
+        coins_to_load = [coin] if (coin == "BTC" or view_mode != "pro") else [coin, "BTC"]
+        data = await db.get_market_data(coins_to_load)
+        await message.answer(
+            text_coin_analysis(coin, data, lang, view_mode=view_mode),
+            parse_mode=ParseMode.HTML,
+            link_preview_options=NO_PREVIEW,
+            reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode, data=data)
+        )
+    except Exception as e:
+        log.error(f"cmd_coin_shortcut error for '{message.text}': {e}")
+        await message.answer(f"Ошибка при загрузке карточки. Попробуйте через кнопку.")
 
 
 @dp.message(Command("scanner"))
