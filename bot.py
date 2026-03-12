@@ -1166,22 +1166,20 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
         change = d.get("change", "—")
         rec    = d.get("recommendation", "")
 
-        # Сигнал: 🟢 BUY / 🔴 SELL / ⚪ HOLD
+        # Сигнал: 🟢BUY / 🔴SELL / ⚪HOLD
         r = str(rec).lower()
         if "покупать" in r or "buy" in r:
-            sig_icon = "🟢"
-            sig_text = " BUY"
+            sig = "🟢<b>BUY</b>"
         elif "продавать" in r or "sell" in r:
-            sig_icon = "🔴"
-            sig_text = "SELL"
+            sig = "🔴<b>SELL</b>"
         else:
-            sig_icon = "⚪"
-            sig_text = "HOLD"
+            sig = "⚪<b>HOLD</b>"
 
-        # Кружок + /COIN вне code (кликабельные), цена+change+сигнал в code (ровные)
+        # Тикер+цена+change в <code> (ровные колонки), сигнал после </code>
+        _coin_pad = f"{coin:<4}"
         _price_s = f"{price:>9}"
         _chg_s = f"{change:>7}"
-        lines.append(f"{sig_icon}/{coin} <code>{_price_s} {_chg_s} {sig_text}</code>")
+        lines.append(f"<code>{_coin_pad} {_price_s} {_chg_s}</code> {sig}")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
