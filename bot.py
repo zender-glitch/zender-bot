@@ -1176,11 +1176,10 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
             sig = "⚪HOLD"
 
         # Тикер как команда /BTC — кликабельный вход в карточку
-        # Паддинг тикера до 4 символов: BTC→"BTC ", DOGE→"DOGE", OP→"OP  "
         _coin_pad = f"{coin:<4}"
-        _price_s = f"{price:>9}"
+        _price_s = f"{price:>8}"
         _chg_s = f"{change:>7}"
-        lines.append(f"/{_coin_pad}<code>{_price_s} {_chg_s}</code> {sig}")
+        lines.append(f"/{_coin_pad} <code>{_price_s} {_chg_s}</code> {sig}")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
