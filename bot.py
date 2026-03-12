@@ -1180,9 +1180,9 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
         if _p != "—" and not _p.startswith("$"):
             _p = f"${_p}"
         _coin_s = f"{coin:<5}"
-        _price_s = f"{_p:>10}"
-        _chg_s = f"{change:>8}"
-        lines.append(f"<code>{_coin_s} {_price_s} {_chg_s} {sig}</code>")
+        _price_s = f"{_p:>9}"
+        _chg_s = f"{change:>7}"
+        lines.append(f"<code>{_coin_s}{_price_s} {_chg_s} {sig}</code>")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
