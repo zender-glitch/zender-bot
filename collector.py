@@ -1699,62 +1699,19 @@ OKX_INSTRUMENTS = {
 async def fetch_okx_top_traders(symbol: str) -> dict:
     """
     OKX: Long/Short ratio of top traders (contract).
-    Бесплатно, без ключа. Работает из EU сервера Railway (Amsterdam).
-    Возвращает okx_top_long и okx_top_short в процентах.
+    СТАТУС: OKX убрал rubik endpoints (404 с марта 2026).
+    Функция ОТКЛЮЧЕНА — возвращает пустой dict.
+    Когда OKX вернёт endpoints или найдём альтернативу — раскомментировать.
+    OKX_INSTRUMENTS оставлен для будущего использования.
     """
-    if symbol not in OKX_INSTRUMENTS:
-        return {}
-
-    cache_key = f"okx_top_{symbol}"
-    if cache_key in OKX_CACHE and (time.time() - OKX_CACHE[cache_key]["ts"]) < OKX_CACHE_TTL:
-        return OKX_CACHE[cache_key]["data"]
-
-    result = {}
-    inst_id = OKX_INSTRUMENTS[symbol]
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            # Попытка 1: Top Traders L/S ratio (contract)
-            resp = await client.get(
-                "https://www.okx.com/api/v5/rubik/stat/contracts-long-short-account-ratio-contract-top-trader",
-                params={"instId": inst_id, "period": "1H"},
-            )
-            if resp.status_code != 200:
-                log.warning(f"  ⚠️ OKX Top Traders {symbol}: HTTP {resp.status_code}")
-                # Попытка 2: обычный L/S ratio (все аккаунты, не только топ)
-                resp = await client.get(
-                    "https://www.okx.com/api/v5/rubik/stat/contracts-long-short-account-ratio",
-                    params={"instId": inst_id, "period": "1H"},
-                )
-                if resp.status_code != 200:
-                    log.warning(f"  ⚠️ OKX L/S fallback {symbol}: HTTP {resp.status_code}")
-                    return {}
-                log.info(f"  📊 OKX {symbol}: используем fallback (все аккаунты)")
-            data = resp.json()
-            code = data.get("code", "?")
-            msg = data.get("msg", "")
-            items = data.get("data", [])
-            if code != "0":
-                log.warning(f"  ⚠️ OKX Top {symbol}: code={code} msg={msg}")
-                return {}
-            if not items:
-                log.warning(f"  ⚠️ OKX Top {symbol}: пустой data[] (code={code})")
-                return {}
-            # Берём самое свежее значение (первый элемент)
-            latest = items[0]
-            ratio_str = latest.get("ratio")
-            if not ratio_str:
-                log.warning(f"  ⚠️ OKX Top {symbol}: нет ratio в ответе, keys={list(latest.keys())}")
-                return {}
-            ratio = float(ratio_str)
-            # ratio = long accounts / short accounts
-            # long% = ratio / (1 + ratio) * 100
-            long_pct = ratio / (1 + ratio) * 100
-            short_pct = 100 - long_pct
-            result["okx_top_long"] = round(long_pct, 1)
-            result["okx_top_short"] = round(short_pct, 1)
-            log.info(f"  📊 OKX Top {symbol}: L={long_pct:.1f}% / S={short_pct:.1f}%")
-    except Exception as e:
-        log.warning(f"  ⚠️ OKX Top Traders {symbol} error: {e}")
+    # TODO: OKX rubik endpoints возвращают 404 (март 2026).
+    # Оба варианта не работают:
+    # - /api/v5/rubik/stat/contracts-long-short-account-ratio-contract-top-trader
+    # - /api/v5/rubik/stat/contracts-long-short-account-ratio
+    # OKX Options (/api/v5/public/opt-summary) работает — значит домен не блокирован.
+    # Вероятно OKX убрал/перенёс rubik endpoints.
+    # Когда найдём рабочий endpoint — раскомментировать код ниже.
+    return {}
 
     if result:
         OKX_CACHE[cache_key] = {"data": result, "ts": time.time()}
