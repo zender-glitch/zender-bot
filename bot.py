@@ -1178,11 +1178,10 @@ def text_radar(coins: list[str], data: dict, lang: str = "ru") -> str:
             sig_icon = "⚪"
             sig_text = "HOLD"
 
-        # Кружок вне code, всё остальное в <code> для идеального выравнивания
-        _coin_pad = f"{coin:<4}"
+        # Кружок + /COIN вне code (кликабельные), цена+change+сигнал в code (ровные)
         _price_s = f"{price:>9}"
         _chg_s = f"{change:>7}"
-        lines.append(f"{sig_icon}<code> {_coin_pad}{_price_s} {_chg_s} {sig_text}</code>")
+        lines.append(f"{sig_icon}/{coin} <code>{_price_s} {_chg_s} {sig_text}</code>")
 
     # Fear & Greed из BTC данных
     btc = data.get("BTC", {})
