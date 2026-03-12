@@ -1891,7 +1891,20 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         try:
             ai_sc = int(float(str(ai_score_str)))
             _ai_title = "AI SCORE" if lang == "en" else "AI SCORE"
-            score_part = f"<b>{_ai_title}: {ai_sc}</b>"
+            # Mood label — пояснение что значит число
+            if lang == "en":
+                if ai_sc >= 80: _mood = "strong bullish"
+                elif ai_sc >= 60: _mood = "bullish"
+                elif ai_sc >= 45: _mood = "neutral"
+                elif ai_sc >= 20: _mood = "bearish"
+                else: _mood = "strong bearish"
+            else:
+                if ai_sc >= 80: _mood = "сильный бычий"
+                elif ai_sc >= 60: _mood = "бычий"
+                elif ai_sc >= 45: _mood = "нейтральный"
+                elif ai_sc >= 20: _mood = "медвежий"
+                else: _mood = "сильный медвежий"
+            score_part = f"<b>{_ai_title}: {ai_sc}</b> · {_mood}"
         except (ValueError, TypeError):
             pass
 
@@ -2123,7 +2136,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         dydx_fr = d.get("dydx_funding", "—")
         dydx_oi_val = d.get("dydx_oi", "—")
 
-        has_multi = (_has(okx_long) or _has(bg_long_pos) or _has(kraken_fr) or _has(dydx_fr))
+        has_multi = (_has(okx_long) or _has(bg_long_pos) or _has(kraken_fr) or _has(kraken_oi_val) or _has(dydx_fr))
         if has_multi:
             lines.append("")
             _me_title = "── МУЛЬТИ-БИРЖА (PRO) ──" if lang == "ru" else "── MULTI-EXCHANGE (PRO) ──"
@@ -2159,12 +2172,14 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 except (ValueError, TypeError):
                     pass
 
-            # Kraken
-            if _has(kraken_fr):
-                _kr_line = f"🦑 Kraken: funding <b>{kraken_fr}</b>"
+            # Kraken (funding не собирается — annualized, ненадёжный; показываем OI)
+            if _has(kraken_fr) or _has(kraken_oi_val):
+                _kr_parts = []
+                if _has(kraken_fr):
+                    _kr_parts.append(f"funding <b>{kraken_fr}</b>")
                 if _has(kraken_oi_val):
-                    _kr_line += f" · OI {kraken_oi_val}"
-                lines.append(_kr_line)
+                    _kr_parts.append(f"OI <b>{kraken_oi_val}</b>")
+                lines.append(f"🦑 Kraken: {' · '.join(_kr_parts)}")
 
             # dYdX
             if _has(dydx_fr):

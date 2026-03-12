@@ -1658,8 +1658,86 @@ async def fetch_solana_defi() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BITGET (бесплатно, без ключа — работает из US серверов Railway)
-# OKX, Binance, Bybit — ВСЕ блокируют US серверы (451/403/400)
+# OKX Top Traders L/S (бесплатно, без ключа — работает из EU сервера Railway)
+# ══════════════════════════════════════════════════════════════════════════════
+
+OKX_CACHE = {}
+OKX_CACHE_TTL = 15 * 60  # 15 минут
+
+# Маппинг наших символов на OKX instId (USDT-margined perp)
+OKX_INSTRUMENTS = {
+    "BTC": "BTC-USDT-SWAP",
+    "ETH": "ETH-USDT-SWAP",
+    "SOL": "SOL-USDT-SWAP",
+    "XRP": "XRP-USDT-SWAP",
+    "ADA": "ADA-USDT-SWAP",
+    "DOGE": "DOGE-USDT-SWAP",
+    "AVAX": "AVAX-USDT-SWAP",
+    "DOT": "DOT-USDT-SWAP",
+    "LINK": "LINK-USDT-SWAP",
+    "BNB": "BNB-USDT-SWAP",
+    "POL": "POL-USDT-SWAP",
+    "TRX": "TRX-USDT-SWAP",
+    "SHIB": "SHIB-USDT-SWAP",
+    "UNI": "UNI-USDT-SWAP",
+    "LTC": "LTC-USDT-SWAP",
+    "ATOM": "ATOM-USDT-SWAP",
+    "NEAR": "NEAR-USDT-SWAP",
+    "APT": "APT-USDT-SWAP",
+    "ARB": "ARB-USDT-SWAP",
+    "OP": "OP-USDT-SWAP",
+}
+
+
+async def fetch_okx_top_traders(symbol: str) -> dict:
+    """
+    OKX: Long/Short ratio of top traders (contract).
+    Бесплатно, без ключа. Работает из EU сервера Railway (Amsterdam).
+    Возвращает okx_top_long и okx_top_short в процентах.
+    """
+    if symbol not in OKX_INSTRUMENTS:
+        return {}
+
+    cache_key = f"okx_top_{symbol}"
+    if cache_key in OKX_CACHE and (time.time() - OKX_CACHE[cache_key]["ts"]) < OKX_CACHE_TTL:
+        return OKX_CACHE[cache_key]["data"]
+
+    result = {}
+    inst_id = OKX_INSTRUMENTS[symbol]
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://www.okx.com/api/v5/rubik/stat/contracts-long-short-account-ratio-contract-top-trader",
+                params={"instId": inst_id, "period": "1H"},
+            )
+            if resp.status_code != 200:
+                log.warning(f"OKX Top Traders {symbol}: HTTP {resp.status_code}")
+                return {}
+            data = resp.json()
+            items = data.get("data", [])
+            if items:
+                # Берём самое свежее значение (первый элемент)
+                latest = items[0]
+                ratio_str = latest.get("ratio")
+                if ratio_str:
+                    ratio = float(ratio_str)
+                    # ratio = long accounts / short accounts
+                    # long% = ratio / (1 + ratio) * 100
+                    long_pct = ratio / (1 + ratio) * 100
+                    short_pct = 100 - long_pct
+                    result["okx_top_long"] = round(long_pct, 1)
+                    result["okx_top_short"] = round(short_pct, 1)
+                    log.info(f"  📊 OKX Top {symbol}: L={long_pct:.1f}% / S={short_pct:.1f}%")
+    except Exception as e:
+        log.warning(f"OKX Top Traders {symbol} error: {e}")
+
+    if result:
+        OKX_CACHE[cache_key] = {"data": result, "ts": time.time()}
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BITGET (бесплатно, без ключа — работает из US и EU серверов Railway)
 # ══════════════════════════════════════════════════════════════════════════════
 
 CROSS_EXCHANGE_CACHE = {}
@@ -2228,7 +2306,9 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
     stablecoin_mcap = coin_data.get("stablecoin_mcap")
     defi_tvl = coin_data.get("defi_tvl")
     defi_tvl_change = coin_data.get("defi_tvl_change")
-    # Cross-exchange данные (Bitget + Kraken + dYdX)
+    # Cross-exchange данные (OKX + Bitget + Kraken + dYdX)
+    okx_top_long = coin_data.get("okx_top_long")
+    okx_top_short = coin_data.get("okx_top_short")
     bitget_long_acc = coin_data.get("bitget_long_acc")
     bitget_short_acc = coin_data.get("bitget_short_acc")
     bitget_long_pos = coin_data.get("bitget_long_pos")
@@ -2306,9 +2386,12 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
             tvl_hint = f" ({'+' if defi_tvl_change > 0 else ''}{defi_tvl_change:.1f}% за день)" if defi_tvl_change else ""
             onchain_lines.append(f"- DeFi TVL: ${defi_tvl/1e9:.1f}B{tvl_hint}")
 
-    # Cross-exchange блок (Bitget + Kraken + dYdX vs Coinglass)
-    if any([bitget_long_acc, bitget_long_pos, kraken_funding, dydx_funding, bid_ask_ratio]):
+    # Cross-exchange блок (OKX + Bitget + Kraken + dYdX vs Coinglass)
+    if any([okx_top_long, bitget_long_acc, bitget_long_pos, kraken_funding, dydx_funding, bid_ask_ratio]):
         onchain_lines.append(f"\nCROSS-EXCHANGE ДАННЫЕ (мульти-биржевое сравнение):")
+        if okx_top_long is not None:
+            okx_hint = "топ-трейдеры в лонгах" if okx_top_long > 55 else "топ-трейдеры в шортах" if okx_top_long < 45 else "баланс"
+            onchain_lines.append(f"- OKX Top Traders: L {okx_top_long:.1f}% / S {okx_top_short:.1f}% — {okx_hint}")
         if bitget_long_acc is not None:
             hint = "ритейл в лонгах" if bitget_long_acc > 60 else "ритейл в шортах" if bitget_long_acc < 40 else "баланс"
             onchain_lines.append(f"- Bitget аккаунты: L {bitget_long_acc}% / S {bitget_short_acc}% — {hint}")
@@ -3535,8 +3618,9 @@ async def collect_all():
             # Технические индикаторы (RSI, MACD, SMA — для не-BTC монет, из CoinGecko истории)
             tech_data = await fetch_tech_indicators(symbol)
 
-            # Cross-exchange данные: Bitget + Kraken + dYdX + Order Book (бесплатно, без ключа)
-            bitget_ls_data, bitget_oi_data, kraken_data, dydx_data, ob_data = await asyncio.gather(
+            # Cross-exchange данные: OKX + Bitget + Kraken + dYdX + Order Book (бесплатно, без ключа)
+            okx_data, bitget_ls_data, bitget_oi_data, kraken_data, dydx_data, ob_data = await asyncio.gather(
+                fetch_okx_top_traders(symbol),
                 fetch_bitget_ls(symbol),
                 fetch_bitget_oi(symbol),
                 fetch_kraken_futures(symbol),
@@ -3558,6 +3642,7 @@ async def collect_all():
                 **gn_data,
                 **cg_indicators,      # Bull Market Peak, AHR999, Bubble, ETF
                 **defillama_data,     # Stablecoin mcap, DeFi TVL
+                **okx_data,           # OKX Top Traders: L/S ratio
                 **bitget_ls_data,     # Bitget Account + Position L/S
                 **bitget_oi_data,     # Bitget OI
                 **kraken_data,        # Kraken Futures: OI
@@ -3667,6 +3752,8 @@ async def collect_all():
                 "sma50": fmt_price(coin_data.get("sma50")),
                 "sma200": fmt_price(coin_data.get("sma200")),
                 "exchange_flow": "—",
+                "okx_top_long": f"{coin_data['okx_top_long']}%" if coin_data.get("okx_top_long") is not None else "—",
+                "okx_top_short": f"{coin_data['okx_top_short']}%" if coin_data.get("okx_top_short") is not None else "—",
                 "bitget_long_acc": f"{coin_data.get('bitget_long_acc', '—')}%" if coin_data.get("bitget_long_acc") is not None else "—",
                 "bitget_short_acc": f"{coin_data.get('bitget_short_acc', '—')}%" if coin_data.get("bitget_short_acc") is not None else "—",
                 "bitget_long_pos": f"{coin_data.get('bitget_long_pos', '—')}%" if coin_data.get("bitget_long_pos") is not None else "—",
