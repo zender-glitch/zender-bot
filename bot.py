@@ -2730,6 +2730,28 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 except (ValueError, TypeError):
                     pass
 
+            # Top Strikes (PRO) — на какой курс ставят
+            if is_pro:
+                strikes_raw = d.get("options_top_strikes", "—")
+                if strikes_raw and strikes_raw != "—" and isinstance(strikes_raw, str) and strikes_raw.startswith("["):
+                    try:
+                        import ast
+                        top_strikes = ast.literal_eval(strikes_raw)
+                        if isinstance(top_strikes, list) and len(top_strikes) > 0:
+                            _strike_title = "ТОП СТРАЙКИ" if lang == "ru" else "TOP STRIKES"
+                            lines.append(f"📍 <b>{_strike_title}</b>")
+                            for s in top_strikes[:3]:
+                                _st = s.get("strike", 0)
+                                _oi = s.get("total_oi", 0)
+                                _side = s.get("side", "")
+                                _calls = s.get("calls", 0)
+                                _puts = s.get("puts", 0)
+                                _oi_str = f"{_oi/1000:.1f}K" if _oi >= 1000 else str(round(_oi))
+                                _side_icon = "🟢" if _side == "CALL" else "🔴"
+                                lines.append(f"  {_side_icon} ${_st:,.0f} · {_oi_str} OI · C:{round(_calls)} P:{round(_puts)}")
+                    except Exception:
+                        pass
+
     # ══════════════════════════════════════════════════════════════
     # AI-АНАЛИЗ (внизу после всех данных)
     # ══════════════════════════════════════════════════════════════
@@ -3233,6 +3255,27 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             _ai_full_title = "🤖 AI-АНАЛИЗ" if lang == "ru" else "🤖 AI ANALYSIS"
             lines.append(f"<b>{_ai_full_title}</b>")
             lines.append(html_lib.escape(llm_text))
+
+    # ── POLYMARKET (PRO) ──
+    if is_pro:
+        poly_raw = d.get("polymarket_data", "—")
+        if poly_raw and poly_raw != "—" and isinstance(poly_raw, str) and poly_raw.startswith("["):
+            try:
+                import ast
+                poly_markets = ast.literal_eval(poly_raw)
+                if isinstance(poly_markets, list) and len(poly_markets) > 0:
+                    _poly_title = "── POLYMARKET (PRO) ──" if lang == "ru" else "── POLYMARKET (PRO) ──"
+                    lines.append("")
+                    lines.append(_poly_title)
+                    _poly_desc = "На что ставят деньгами:" if lang == "ru" else "What money is betting on:"
+                    lines.append(f"<i>{_poly_desc}</i>")
+                    for pm in poly_markets[:3]:
+                        _q = pm.get("question", "")
+                        _pct = pm.get("yes_pct", 0)
+                        _vol = pm.get("volume", "")
+                        lines.append(f"  🎯 {_q} — <b>{_pct}%</b> ({_vol})")
+            except Exception:
+                pass
 
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")

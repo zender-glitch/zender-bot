@@ -949,6 +949,21 @@ async def fetch_deribit_options(symbol: str) -> dict:
                 for e in top_expiries:
                     e["is_max"] = (e["oi"] == max_oi_val)
 
+            # Топ-страйки по OI (для показа "на какой курс ставят")
+            top_strikes = []
+            if strikes_data:
+                all_strikes = [(s, d["call_oi"] + d["put_oi"], d["call_oi"], d["put_oi"]) for s, d in strikes_data.items()]
+                all_strikes.sort(key=lambda x: -x[1])
+                for s, total, calls, puts in all_strikes[:5]:
+                    side = "CALL" if calls > puts else "PUT"
+                    top_strikes.append({
+                        "strike": s,
+                        "total_oi": round(total),
+                        "calls": round(calls),
+                        "puts": round(puts),
+                        "side": side,
+                    })
+
             result = {}
             if pcr is not None:
                 result["options_pcr"] = pcr
@@ -962,6 +977,8 @@ async def fetch_deribit_options(symbol: str) -> dict:
                 result["options_oi_puts"] = round(total_oi_puts, 2)
             if top_expiries:
                 result["options_expiries"] = top_expiries
+            if top_strikes:
+                result["options_top_strikes"] = top_strikes
 
             if result:
                 OPTIONS_CACHE[cache_key] = {"data": result, "ts": time.time()}
@@ -2673,6 +2690,66 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
         }
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# POLYMARKET — Prediction Markets for Crypto
+# ══════════════════════════════════════════════════════════════════════════════
+
+POLYMARKET_CACHE: dict = {}
+POLYMARKET_CACHE_TTL = 900  # 15 min
+
+async def fetch_polymarket_crypto() -> list:
+    """Fetch crypto prediction markets from Polymarket Gamma API."""
+    cache_key = "polymarket_crypto"
+    if cache_key in POLYMARKET_CACHE and (time.time() - POLYMARKET_CACHE[cache_key]["ts"]) < POLYMARKET_CACHE_TTL:
+        return POLYMARKET_CACHE[cache_key]["data"]
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://gamma-api.polymarket.com/events",
+                params={"closed": "false", "tag": "crypto", "limit": "20"}
+            )
+            if resp.status_code != 200:
+                log.warning(f"  ⚠️ Polymarket: HTTP {resp.status_code}")
+                return []
+
+            events = resp.json()
+            markets = []
+            for event in events:
+                title = event.get("title", "")
+                # Filter only BTC/ETH price predictions
+                if not any(kw in title.upper() for kw in ["BTC", "BITCOIN", "ETH", "ETHEREUM", "CRYPTO"]):
+                    continue
+                for market in event.get("markets", []):
+                    question = market.get("question", title)
+                    outcomes = market.get("outcomePrices", "")
+                    volume = market.get("volume", 0)
+                    liquidity = market.get("liquidity", 0)
+                    try:
+                        prices = [float(p) for p in outcomes.strip("[]").split(",") if p.strip()]
+                        yes_pct = round(prices[0] * 100) if prices else 0
+                    except (ValueError, IndexError):
+                        yes_pct = 0
+                    if yes_pct > 0 and float(volume) > 10000:
+                        markets.append({
+                            "question": question[:60],
+                            "yes_pct": yes_pct,
+                            "volume": f"${float(volume)/1e6:.1f}M" if float(volume) >= 1e6 else f"${float(volume)/1e3:.0f}K",
+                            "volume_raw": float(volume),
+                        })
+            # Sort by volume, take top 5
+            markets.sort(key=lambda x: -x["volume_raw"])
+            markets = markets[:5]
+            if markets:
+                POLYMARKET_CACHE[cache_key] = {"data": markets, "ts": time.time()}
+                log.info(f"  🎯 Polymarket: {len(markets)} crypto markets loaded")
+            return markets
+
+    except Exception as e:
+        log.warning(f"  ⚠️ Polymarket error: {e}")
+        return []
+
+
 async def generate_pro_analysis(symbol: str, coin_data: dict, pipeline: dict, lang: str = "ru") -> str:
     """Generate detailed PRO analysis — full market breakdown for paying users.
     Returns 400-800 char text with specific numbers, causes, and actionable insights."""
@@ -3672,6 +3749,9 @@ async def collect_all():
     # Whale Alert: крупные транзакции китов за последний час (1 запрос на все монеты)
     whale_data_all = await fetch_whale_transactions()
 
+    # Polymarket: prediction markets для крипто (кэш 15 мин)
+    polymarket_data = await fetch_polymarket_crypto()
+
     # Общие данные (СНАЧАЛА цены — приоритет!)
     fg_data = await fetch_fear_greed()
     prices = await fetch_prices()
@@ -3933,6 +4013,8 @@ async def collect_all():
                 "options_oi_calls": str(coin_data.get("options_oi_calls", "—")),
                 "options_oi_puts": str(coin_data.get("options_oi_puts", "—")),
                 "options_expiries": str(coin_data.get("options_expiries", "—")),
+                "options_top_strikes": str(coin_data.get("options_top_strikes", "—")),
+                "polymarket_data": str(polymarket_data) if polymarket_data else "—",
                 "cvd_value": str(coin_data.get("cvd_value", "—")),
                 "cvd_trend": str(coin_data.get("cvd_trend", "—")),
                 "cvd_side": str(coin_data.get("cvd_side", "—")),
