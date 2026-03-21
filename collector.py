@@ -2704,13 +2704,12 @@ async def fetch_polymarket_crypto() -> list:
         return POLYMARKET_CACHE[cache_key]["data"]
 
     try:
-        # Must contain a crypto coin name
-        COIN_NAMES = ["BTC", "BITCOIN", "ETH", "ETHEREUM", "SOL", "SOLANA", "XRP", "BNB", "ADA", "DOGE", "AVAX"]
-        # Must also contain price-related word to filter out non-crypto
-        PRICE_KW = ["$", "PRICE", "ABOVE", "BELOW", "ATH", "HIGH", "LOW", "100K", "80K", "75K", "50K", "10K", "3K", "1K"]
+        # For bitcoin/ethereum tags — accept all markets (already crypto)
+        # For crypto tag — filter by coin names
+        COIN_NAMES = ["BTC", "BITCOIN", "ETH", "ETHEREUM", "SOL", "SOLANA", "XRP", "BNB", "DOGE", "CRYPTO"]
         async with httpx.AsyncClient(timeout=15) as client:
             markets = []
-            for search_tag in ["crypto", "bitcoin", "ethereum"]:
+            for search_tag in ["bitcoin", "ethereum", "crypto"]:
                 try:
                     resp = await client.get(
                         "https://gamma-api.polymarket.com/events",
@@ -2719,21 +2718,19 @@ async def fetch_polymarket_crypto() -> list:
                     if resp.status_code == 200:
                         events = resp.json()
                         log.info(f"  🎯 Polymarket tag={search_tag}: {len(events)} events")
+                        # Log first 3 titles for debug
+                        for ev in events[:3]:
+                            log.info(f"    → {ev.get('title', '?')[:80]}")
                         for event in events:
                             title = event.get("title", "")
-                            desc = event.get("description", "")
-                            combined = (title + " " + desc).upper()
-                            # Must mention a crypto coin AND a price keyword
-                            has_coin = any(cn in combined for cn in COIN_NAMES)
-                            has_price = any(pk in combined for pk in PRICE_KW)
-                            if not (has_coin and has_price):
-                                continue
+                            # For bitcoin/ethereum tags, accept all events
+                            # For crypto tag, filter by coin names
+                            if search_tag == "crypto":
+                                combined = title.upper()
+                                if not any(cn in combined for cn in COIN_NAMES):
+                                    continue
                             for market in event.get("markets", []):
                                 question = market.get("question", title)
-                                q_upper = question.upper()
-                                # Double check: question itself should mention crypto
-                                if not any(cn in q_upper for cn in COIN_NAMES):
-                                    continue
                                 outcomes = market.get("outcomePrices", "")
                                 volume = market.get("volume", 0)
                                 try:
