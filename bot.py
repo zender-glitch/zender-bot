@@ -2225,29 +2225,30 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 lines.append(_dx_line)
 
     # ── ГЛУБИНА СТАКАНА (PRO) ──
-    # Приоритет: Kraken OB → fallback на Binance OBI
+    # Приоритет: Binance OBI (500 уровней, все монеты) → fallback Kraken OB
     if is_pro:
-        bid_depth = d.get("bid_depth_usd", "—")
-        ask_depth = d.get("ask_depth_usd", "—")
-        ba_ratio = d.get("bid_ask_ratio", "—")
-        # Fallback: если Kraken не вернул данные, берём из Binance OBI
+        # Сначала пробуем Binance OBI — надёжнее и больше ликвидности
         _bd_val = 0
         _ad_val = 0
+        obi_bid = d.get("obi_bid_vol", "—")
+        obi_ask = d.get("obi_ask_vol", "—")
         try:
-            _bd_val = float(str(bid_depth).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
-            _ad_val = float(str(ask_depth).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
+            _bd_val = float(str(obi_bid).replace("$", "").replace(",", ""))
+            _ad_val = float(str(obi_ask).replace("$", "").replace(",", ""))
         except (ValueError, TypeError):
             pass
-        if _bd_val < 1000 or _ad_val < 1000:
-            # Kraken пусто — используем Binance OBI данные
-            obi_bid = d.get("obi_bid_vol", "—")
-            obi_ask = d.get("obi_ask_vol", "—")
+        # Fallback на Kraken только если Binance пустой
+        if _bd_val < 10000 or _ad_val < 10000:
+            bid_depth = d.get("bid_depth_usd", "—")
+            ask_depth = d.get("ask_depth_usd", "—")
             try:
-                _bd_val = float(str(obi_bid).replace("$", "").replace(",", ""))
-                _ad_val = float(str(obi_ask).replace("$", "").replace(",", ""))
+                _kr_bd = float(str(bid_depth).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
+                _kr_ad = float(str(ask_depth).replace("$", "").replace(",", "").replace("M", "e6").replace("B", "e9"))
+                if _kr_bd > _bd_val and _kr_ad > _ad_val:
+                    _bd_val = _kr_bd
+                    _ad_val = _kr_ad
             except (ValueError, TypeError):
-                _bd_val = 0
-                _ad_val = 0
+                pass
         if _bd_val > 1000 and _ad_val > 1000:
             lines.append("")
             _ob_title = "── СТАКАН (PRO) ──" if lang == "ru" else "── ORDER BOOK (PRO) ──"
