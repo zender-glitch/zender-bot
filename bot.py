@@ -2806,20 +2806,6 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             except Exception:
                 pass
 
-    # ── PRO: полный LLM-анализ — после индикаторов, перед давлением ──
-    if is_pro:
-        _pro_text = _clean(d.get("llm_text_pro", ""))
-        if _pro_text:
-            lines.append("")
-            _ai_full_title = "🤖 AI-АНАЛИЗ (ПОЛНЫЙ)" if lang == "ru" else "🤖 AI ANALYSIS (FULL)"
-            lines.append(f"<b>{_ai_full_title}</b>")
-            lines.append(html_lib.escape(_pro_text))
-        elif llm_text:
-            lines.append("")
-            _ai_full_title = "🤖 AI-АНАЛИЗ" if lang == "ru" else "🤖 AI ANALYSIS"
-            lines.append(f"<b>{_ai_full_title}</b>")
-            lines.append(html_lib.escape(llm_text))
-
     # ── ДАВЛЕНИЕ РЫНКА (визуальная шкала) ──
     prob_bull = d.get("prob_bull")
     prob_bear = d.get("prob_bear")
@@ -3275,6 +3261,20 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                     lines.append(f"→ {_mom}")
         except (ValueError, TypeError):
             pass
+
+    # ── PRO: полный LLM-анализ — ПОДВЕДЕНИЕ ИТОГОВ (самый конец) ──
+    if is_pro:
+        _pro_text = _clean(d.get("llm_text_pro", ""))
+        if _pro_text:
+            lines.append("")
+            _ai_full_title = "🤖 AI-АНАЛИЗ (ПОЛНЫЙ)" if lang == "ru" else "🤖 AI ANALYSIS (FULL)"
+            lines.append(f"<b>{_ai_full_title}</b>")
+            lines.append(html_lib.escape(_pro_text))
+        elif llm_text:
+            lines.append("")
+            _ai_full_title = "🤖 AI-АНАЛИЗ" if lang == "ru" else "🤖 AI ANALYSIS"
+            lines.append(f"<b>{_ai_full_title}</b>")
+            lines.append(html_lib.escape(llm_text))
 
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
