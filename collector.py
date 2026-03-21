@@ -2704,9 +2704,11 @@ async def fetch_polymarket_crypto() -> list:
         return POLYMARKET_CACHE[cache_key]["data"]
 
     try:
-        # For bitcoin/ethereum tags — accept all markets (already crypto)
-        # For crypto tag — filter by coin names
-        COIN_NAMES = ["BTC", "BITCOIN", "ETH", "ETHEREUM", "SOL", "SOLANA", "XRP", "BNB", "DOGE", "CRYPTO"]
+        # ALL markets must mention crypto in the question — no exceptions
+        CRYPTO_WORDS = ["BTC", "BITCOIN", "ETH", "ETHEREUM", "SOL", "SOLANA", "XRP", "BNB", "DOGE",
+                        "CRYPTO", "ALTCOIN", "DEFI", "STABLECOIN", "USDT", "USDC"]
+        PRICE_WORDS = ["$", "PRICE", "ABOVE", "BELOW", "ATH", "HIGH", "HIT", "REACH", "WORTH",
+                       "100K", "80K", "75K", "70K", "50K", "10K", "5K", "3K", "1K"]
         async with httpx.AsyncClient(timeout=15) as client:
             markets = []
             for search_tag in ["bitcoin", "ethereum", "crypto"]:
@@ -2718,19 +2720,15 @@ async def fetch_polymarket_crypto() -> list:
                     if resp.status_code == 200:
                         events = resp.json()
                         log.info(f"  🎯 Polymarket tag={search_tag}: {len(events)} events")
-                        # Log first 3 titles for debug
                         for ev in events[:3]:
                             log.info(f"    → {ev.get('title', '?')[:80]}")
                         for event in events:
-                            title = event.get("title", "")
-                            # For bitcoin/ethereum tags, accept all events
-                            # For crypto tag, filter by coin names
-                            if search_tag == "crypto":
-                                combined = title.upper()
-                                if not any(cn in combined for cn in COIN_NAMES):
-                                    continue
                             for market in event.get("markets", []):
-                                question = market.get("question", title)
+                                question = market.get("question", event.get("title", ""))
+                                q_upper = question.upper()
+                                # STRICT: question must contain crypto word
+                                if not any(cw in q_upper for cw in CRYPTO_WORDS):
+                                    continue
                                 outcomes = market.get("outcomePrices", "")
                                 volume = market.get("volume", 0)
                                 try:
