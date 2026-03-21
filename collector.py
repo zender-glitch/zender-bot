@@ -2673,6 +2673,122 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
         }
 
 
+async def generate_pro_analysis(symbol: str, coin_data: dict, pipeline: dict, lang: str = "ru") -> str:
+    """Generate detailed PRO analysis — full market breakdown for paying users.
+    Returns 400-800 char text with specific numbers, causes, and actionable insights."""
+
+    price = coin_data.get("price") or coin_data.get("current_price")
+    change = coin_data.get("price_change_24h")
+    fr = coin_data.get("funding_rate")
+    oi = coin_data.get("open_interest")
+    oi_change = coin_data.get("oi_change_1h")
+    long_pct = coin_data.get("long_percent")
+    short_pct = coin_data.get("short_percent")
+    fg = coin_data.get("fear_greed")
+    fg_label = coin_data.get("fear_greed_label")
+    cvd = coin_data.get("cvd_value")
+    cvd_side = coin_data.get("cvd_side")
+    obi = coin_data.get("obi_value")
+    obi_side = coin_data.get("obi_side")
+    rsi = coin_data.get("rsi")
+    macd = coin_data.get("macd")
+    whale_dir = coin_data.get("whale_direction")
+    whale_usd = coin_data.get("whale_total_usd")
+    prob_bull = pipeline.get("prob_bull", 50)
+    prob_bear = pipeline.get("prob_bear", 50)
+    recommendation = pipeline.get("recommendation", "выжидать")
+    strength = pipeline.get("strength", "слабо")
+    trap = pipeline.get("trap", "нет")
+    dir_factors_bull = pipeline.get("dir_factors_bull", [])
+    dir_factors_bear = pipeline.get("dir_factors_bear", [])
+
+    if lang == "ru":
+        prompt = f"""Ты — профессиональный крипто-аналитик. Напиши РАЗВЁРНУТЫЙ разбор {symbol} для трейдера.
+
+ДАННЫЕ {symbol}:
+- Цена: ${safe_usd(price)}, 24ч: {safe_pct(change)}
+- Funding Rate: {safe_pct(fr)}
+- OI: {safe_usd(oi)}, изменение 1ч: {safe_pct(oi_change)}
+- Покупатели/Продавцы: {long_pct or '?'}% / {short_pct or '?'}%
+- RSI: {rsi or '?'}, MACD: {safe_pct(macd)}
+- CVD: {cvd_side or '?'} ({safe_usd(cvd)})
+- Стакан: {obi_side or '?'} (OBI: {obi or '?'})
+- Fear & Greed: {fg or '?'} ({fg_label or '?'})
+- Киты: {whale_dir or '?'} ({safe_usd(whale_usd)})
+- Вероятность: рост {prob_bull}% / падение {prob_bear}%
+- Бычьи факторы: {', '.join(dir_factors_bull) if dir_factors_bull else 'нет'}
+- Медвежьи факторы: {', '.join(dir_factors_bear) if dir_factors_bear else 'нет'}
+- Рекомендация алгоритма: {recommendation} ({strength})
+- Ловушка: {trap}
+
+НАПИШИ 4-6 ПРЕДЛОЖЕНИЙ:
+1. Что сейчас происходит с {symbol} — конкретно, с цифрами
+2. Почему цена двигается именно так — какие силы давят
+3. На что обратить внимание — ключевые уровни и риски
+4. Что ожидать в ближайшие часы
+
+ПРАВИЛА:
+- Пиши как опытный трейдер для другого трейдера
+- Используй КОНКРЕТНЫЕ цифры из данных (цена, %, объёмы)
+- НЕ используй технические термины вроде RSI/MACD/SOPR — объясняй простыми словами
+- НЕ повторяй одни и те же фразы типа "покупатели давят" или "ловушка для шортов" — каждый раз формулируй УНИКАЛЬНО
+- Без звёздочек, без markdown, без заголовков
+- Максимум 600 символов"""
+    else:
+        prompt = f"""You are a professional crypto analyst. Write a DETAILED breakdown of {symbol} for a trader.
+
+{symbol} DATA:
+- Price: ${safe_usd(price)}, 24h: {safe_pct(change)}
+- Funding Rate: {safe_pct(fr)}
+- OI: {safe_usd(oi)}, 1h change: {safe_pct(oi_change)}
+- Buyers/Sellers: {long_pct or '?'}% / {short_pct or '?'}%
+- RSI: {rsi or '?'}, MACD: {safe_pct(macd)}
+- CVD: {cvd_side or '?'} ({safe_usd(cvd)})
+- Order Book: {obi_side or '?'} (OBI: {obi or '?'})
+- Fear & Greed: {fg or '?'} ({fg_label or '?'})
+- Whales: {whale_dir or '?'} ({safe_usd(whale_usd)})
+- Probability: up {prob_bull}% / down {prob_bear}%
+- Bull factors: {', '.join(dir_factors_bull) if dir_factors_bull else 'none'}
+- Bear factors: {', '.join(dir_factors_bear) if dir_factors_bear else 'none'}
+- Algorithm recommendation: {recommendation} ({strength})
+
+Write 4-6 sentences: what's happening, why, key levels/risks, what to expect.
+Use SPECIFIC numbers. No RSI/MACD jargon. Max 600 chars. No markdown."""
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 500,
+                    "temperature": 0.3,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data["content"][0]["text"].strip()
+                text = text.replace("**", "").replace("*", "").replace("__", "").replace("_", "")
+                if len(text) > 700:
+                    # Обрезаем по последней точке
+                    cut = text[:700].rfind(".")
+                    text = text[:cut + 1] if cut > 100 else text[:697] + "..."
+                log.info(f"  🤖 Pro Analysis {symbol}: {len(text)} chars")
+                return text
+            else:
+                log.warning(f"  ⚠️ Pro Analysis {symbol}: HTTP {resp.status_code}")
+                return ""
+    except Exception as e:
+        log.warning(f"  ⚠️ Pro Analysis {symbol}: {e}")
+        return ""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 3-СЛОЙНАЯ АРХИТЕКТУРА СИГНАЛА
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3722,6 +3838,13 @@ async def collect_all():
             _do_llm = HAS_ANTHROPIC and coin_data.get("price") and coin_data.get("oi") and _run_llm_this_cycle
             if _do_llm:
                 llm_data = await generate_llm_analysis(symbol, coin_data, pipeline)
+                # Pro analysis — detailed text for paying users
+                try:
+                    _pro_text = await generate_pro_analysis(symbol, coin_data, pipeline)
+                    if _pro_text:
+                        llm_data["llm_text_pro"] = _pro_text
+                except Exception as _pe:
+                    log.warning(f"  ⚠️ Pro analysis {symbol} failed: {_pe}")
             else:
                 # Без LLM — используем pipeline данные напрямую
                 llm_data = {
@@ -3828,6 +3951,7 @@ async def collect_all():
                 "liq_level_shorts": fmt_price(liq_levels.get("liq_level_shorts")) if liq_levels.get("liq_level_shorts") else "",
                 "liq_level_longs": fmt_price(liq_levels.get("liq_level_longs")) if liq_levels.get("liq_level_longs") else "",
                 "llm_text": llm_data.get("llm_text", ""),
+                "llm_text_pro": llm_data.get("llm_text_pro", ""),
                 "what_happening": llm_data.get("what_happening", ""),
                 "horizon": llm_data.get("horizon", ""),
                 "trap": llm_data.get("trap", ""),
@@ -3852,7 +3976,7 @@ async def collect_all():
 
             # Если LLM не запускался в этом цикле — не перезаписываем LLM-поля в БД
             if not _run_llm_this_cycle:
-                for _llm_key in ("llm_text", "what_happening", "recommendation", "strength",
+                for _llm_key in ("llm_text", "llm_text_pro", "what_happening", "recommendation", "strength",
                                  "entry", "stop", "target", "buy_zone", "sell_zone",
                                  "horizon", "trap", "trap_display", "funding_conflict"):
                     record.pop(_llm_key, None)

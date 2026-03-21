@@ -3220,13 +3220,18 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
             pass
 
     # ── PRO: полный LLM-анализ ──
-    if is_pro and llm_text:
-        lines.append("")
-        _ai_full_title = "🤖 AI-АНАЛИЗ (ПОЛНЫЙ)" if lang == "ru" else "🤖 AI ANALYSIS (FULL)"
-        lines.append(f"<b>{_ai_full_title}</b>")
-        # Ограничиваем длину LLM текста для читаемости
-        _llm_short = llm_text if len(llm_text) <= 200 else llm_text[:197] + "..."
-        lines.append(html_lib.escape(_llm_short))
+    if is_pro:
+        _pro_text = _clean(d.get("llm_text_pro", ""))
+        if _pro_text:
+            lines.append("")
+            _ai_full_title = "🤖 AI-АНАЛИЗ (ПОЛНЫЙ)" if lang == "ru" else "🤖 AI ANALYSIS (FULL)"
+            lines.append(f"<b>{_ai_full_title}</b>")
+            lines.append(html_lib.escape(_pro_text))
+        elif llm_text:
+            lines.append("")
+            _ai_full_title = "🤖 AI-АНАЛИЗ" if lang == "ru" else "🤖 AI ANALYSIS"
+            lines.append(f"<b>{_ai_full_title}</b>")
+            lines.append(html_lib.escape(llm_text))
 
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
