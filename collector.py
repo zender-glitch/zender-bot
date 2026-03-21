@@ -2677,6 +2677,19 @@ async def generate_pro_analysis(symbol: str, coin_data: dict, pipeline: dict, la
     """Generate detailed PRO analysis — full market breakdown for paying users.
     Returns 400-800 char text with specific numbers, causes, and actionable insights."""
 
+    def safe_usd(v):
+        try:
+            return f"${float(v):,.0f}"
+        except (TypeError, ValueError):
+            return "?"
+
+    def safe_pct(v):
+        try:
+            val = float(v)
+            return f"{'+' if val > 0 else ''}{val:.2f}%"
+        except (TypeError, ValueError):
+            return "?"
+
     price = coin_data.get("price") or coin_data.get("current_price")
     change = coin_data.get("price_change_24h")
     fr = coin_data.get("funding_rate")
