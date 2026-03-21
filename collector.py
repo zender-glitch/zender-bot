@@ -2704,10 +2704,12 @@ async def fetch_polymarket_crypto() -> list:
         return POLYMARKET_CACHE[cache_key]["data"]
 
     try:
-        CRYPTO_KW = ["BTC", "BITCOIN", "ETH", "ETHEREUM", "CRYPTO", "SOL", "SOLANA", "XRP", "PRICE", "ABOVE", "BELOW", "$"]
+        # Must contain a crypto coin name
+        COIN_NAMES = ["BTC", "BITCOIN", "ETH", "ETHEREUM", "SOL", "SOLANA", "XRP", "BNB", "ADA", "DOGE", "AVAX"]
+        # Must also contain price-related word to filter out non-crypto
+        PRICE_KW = ["$", "PRICE", "ABOVE", "BELOW", "ATH", "HIGH", "LOW", "100K", "80K", "75K", "50K", "10K", "3K", "1K"]
         async with httpx.AsyncClient(timeout=15) as client:
             markets = []
-            # Try multiple search approaches
             for search_tag in ["crypto", "bitcoin", "ethereum"]:
                 try:
                     resp = await client.get(
@@ -2721,10 +2723,17 @@ async def fetch_polymarket_crypto() -> list:
                             title = event.get("title", "")
                             desc = event.get("description", "")
                             combined = (title + " " + desc).upper()
-                            if not any(kw in combined for kw in CRYPTO_KW):
+                            # Must mention a crypto coin AND a price keyword
+                            has_coin = any(cn in combined for cn in COIN_NAMES)
+                            has_price = any(pk in combined for pk in PRICE_KW)
+                            if not (has_coin and has_price):
                                 continue
                             for market in event.get("markets", []):
                                 question = market.get("question", title)
+                                q_upper = question.upper()
+                                # Double check: question itself should mention crypto
+                                if not any(cn in q_upper for cn in COIN_NAMES):
+                                    continue
                                 outcomes = market.get("outcomePrices", "")
                                 volume = market.get("volume", 0)
                                 try:
@@ -2739,7 +2748,6 @@ async def fetch_polymarket_crypto() -> list:
                                     yes_pct = 0
                                 vol = float(volume) if volume else 0
                                 if yes_pct > 0 and vol > 1000:
-                                    # Deduplicate
                                     q_short = question[:60]
                                     if not any(m["question"] == q_short for m in markets):
                                         markets.append({
@@ -2874,7 +2882,7 @@ Use SPECIFIC numbers. No RSI/MACD jargon. Max 600 chars. No markdown."""
                 },
                 json={
                     "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 500,
+                    "max_tokens": 700,
                     "temperature": 0.3,
                     "messages": [{"role": "user", "content": prompt}],
                 },
@@ -2883,9 +2891,15 @@ Use SPECIFIC numbers. No RSI/MACD jargon. Max 600 chars. No markdown."""
                 data = resp.json()
                 text = data["content"][0]["text"].strip()
                 text = text.replace("**", "").replace("*", "").replace("__", "").replace("_", "")
-                if len(text) > 700:
-                    # Обрезаем по последней точке
-                    cut = text[:700].rfind(".")
+                # Always trim to last complete sentence
+                if len(text) > 800:
+                    cut = text[:800].rfind(".")
+                    text = text[:cut + 1] if cut > 100 else text[:797] + "..."
+                elif not text.endswith(".") and not text.endswith("!") and not text.endswith("?"):
+                    # Incomplete sentence — trim to last period
+                    cut = text.rfind(".")
+                    if cut > len(text) * 0.5:
+                        text = text[:cut + 1]
                     text = text[:cut + 1] if cut > 100 else text[:697] + "..."
                 log.info(f"  🤖 Pro Analysis {symbol}: {len(text)} chars")
                 return text
