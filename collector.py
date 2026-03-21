@@ -2704,45 +2704,63 @@ async def fetch_polymarket_crypto() -> list:
         return POLYMARKET_CACHE[cache_key]["data"]
 
     try:
+        CRYPTO_KW = ["BTC", "BITCOIN", "ETH", "ETHEREUM", "CRYPTO", "SOL", "SOLANA", "XRP", "PRICE", "ABOVE", "BELOW", "$"]
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                "https://gamma-api.polymarket.com/events",
-                params={"closed": "false", "tag": "crypto", "limit": "20"}
-            )
-            if resp.status_code != 200:
-                log.warning(f"  ⚠️ Polymarket: HTTP {resp.status_code}")
-                return []
-
-            events = resp.json()
             markets = []
-            for event in events:
-                title = event.get("title", "")
-                # Filter only BTC/ETH price predictions
-                if not any(kw in title.upper() for kw in ["BTC", "BITCOIN", "ETH", "ETHEREUM", "CRYPTO"]):
-                    continue
-                for market in event.get("markets", []):
-                    question = market.get("question", title)
-                    outcomes = market.get("outcomePrices", "")
-                    volume = market.get("volume", 0)
-                    liquidity = market.get("liquidity", 0)
-                    try:
-                        prices = [float(p) for p in outcomes.strip("[]").split(",") if p.strip()]
-                        yes_pct = round(prices[0] * 100) if prices else 0
-                    except (ValueError, IndexError):
-                        yes_pct = 0
-                    if yes_pct > 0 and float(volume) > 10000:
-                        markets.append({
-                            "question": question[:60],
-                            "yes_pct": yes_pct,
-                            "volume": f"${float(volume)/1e6:.1f}M" if float(volume) >= 1e6 else f"${float(volume)/1e3:.0f}K",
-                            "volume_raw": float(volume),
-                        })
+            # Try multiple search approaches
+            for search_tag in ["crypto", "bitcoin", "ethereum"]:
+                try:
+                    resp = await client.get(
+                        "https://gamma-api.polymarket.com/events",
+                        params={"closed": "false", "tag": search_tag, "limit": "30"}
+                    )
+                    if resp.status_code == 200:
+                        events = resp.json()
+                        log.info(f"  🎯 Polymarket tag={search_tag}: {len(events)} events")
+                        for event in events:
+                            title = event.get("title", "")
+                            desc = event.get("description", "")
+                            combined = (title + " " + desc).upper()
+                            if not any(kw in combined for kw in CRYPTO_KW):
+                                continue
+                            for market in event.get("markets", []):
+                                question = market.get("question", title)
+                                outcomes = market.get("outcomePrices", "")
+                                volume = market.get("volume", 0)
+                                try:
+                                    if isinstance(outcomes, str):
+                                        prices = [float(p) for p in outcomes.strip("[]").replace('"', '').split(",") if p.strip()]
+                                    elif isinstance(outcomes, list):
+                                        prices = [float(p) for p in outcomes]
+                                    else:
+                                        prices = []
+                                    yes_pct = round(prices[0] * 100) if prices else 0
+                                except (ValueError, IndexError):
+                                    yes_pct = 0
+                                vol = float(volume) if volume else 0
+                                if yes_pct > 0 and vol > 1000:
+                                    # Deduplicate
+                                    q_short = question[:60]
+                                    if not any(m["question"] == q_short for m in markets):
+                                        markets.append({
+                                            "question": q_short,
+                                            "yes_pct": yes_pct,
+                                            "volume": f"${vol/1e6:.1f}M" if vol >= 1e6 else f"${vol/1e3:.0f}K",
+                                            "volume_raw": vol,
+                                        })
+                except Exception as e:
+                    log.warning(f"  ⚠️ Polymarket tag={search_tag}: {e}")
+
             # Sort by volume, take top 5
             markets.sort(key=lambda x: -x["volume_raw"])
             markets = markets[:5]
             if markets:
                 POLYMARKET_CACHE[cache_key] = {"data": markets, "ts": time.time()}
                 log.info(f"  🎯 Polymarket: {len(markets)} crypto markets loaded")
+                for m in markets[:3]:
+                    log.info(f"    {m['question']} → {m['yes_pct']}% ({m['volume']})")
+            else:
+                log.info(f"  🎯 Polymarket: no crypto markets found")
             return markets
 
     except Exception as e:
