@@ -2786,6 +2786,40 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         lines.append(f"⚠️ <b>{t('trap', lang)}</b>")
         lines.append(html_lib.escape(trap))
 
+    # ── POLYMARKET (PRO) — перед AI анализом ──
+    if is_pro:
+        poly_raw = d.get("polymarket_data", "—")
+        if poly_raw and poly_raw != "—" and isinstance(poly_raw, str) and poly_raw.startswith("["):
+            try:
+                import ast as _ast_poly
+                poly_markets = _ast_poly.literal_eval(poly_raw)
+                if isinstance(poly_markets, list) and len(poly_markets) > 0:
+                    lines.append("")
+                    lines.append("── POLYMARKET (PRO) ──")
+                    _poly_desc = "На что ставят деньгами:" if lang == "ru" else "What money is betting on:"
+                    lines.append(f"<i>{_poly_desc}</i>")
+                    for pm in poly_markets[:3]:
+                        _q = pm.get("question", "")
+                        _pct = pm.get("yes_pct", 0)
+                        _vol = pm.get("volume", "")
+                        lines.append(f"  🎯 {_q} — <b>{_pct}%</b> ({_vol})")
+            except Exception:
+                pass
+
+    # ── PRO: полный LLM-анализ — после индикаторов, перед давлением ──
+    if is_pro:
+        _pro_text = _clean(d.get("llm_text_pro", ""))
+        if _pro_text:
+            lines.append("")
+            _ai_full_title = "🤖 AI-АНАЛИЗ (ПОЛНЫЙ)" if lang == "ru" else "🤖 AI ANALYSIS (FULL)"
+            lines.append(f"<b>{_ai_full_title}</b>")
+            lines.append(html_lib.escape(_pro_text))
+        elif llm_text:
+            lines.append("")
+            _ai_full_title = "🤖 AI-АНАЛИЗ" if lang == "ru" else "🤖 AI ANALYSIS"
+            lines.append(f"<b>{_ai_full_title}</b>")
+            lines.append(html_lib.escape(llm_text))
+
     # ── ДАВЛЕНИЕ РЫНКА (визуальная шкала) ──
     prob_bull = d.get("prob_bull")
     prob_bear = d.get("prob_bear")
@@ -3241,41 +3275,6 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                     lines.append(f"→ {_mom}")
         except (ValueError, TypeError):
             pass
-
-    # ── PRO: полный LLM-анализ ──
-    if is_pro:
-        _pro_text = _clean(d.get("llm_text_pro", ""))
-        if _pro_text:
-            lines.append("")
-            _ai_full_title = "🤖 AI-АНАЛИЗ (ПОЛНЫЙ)" if lang == "ru" else "🤖 AI ANALYSIS (FULL)"
-            lines.append(f"<b>{_ai_full_title}</b>")
-            lines.append(html_lib.escape(_pro_text))
-        elif llm_text:
-            lines.append("")
-            _ai_full_title = "🤖 AI-АНАЛИЗ" if lang == "ru" else "🤖 AI ANALYSIS"
-            lines.append(f"<b>{_ai_full_title}</b>")
-            lines.append(html_lib.escape(llm_text))
-
-    # ── POLYMARKET (PRO) ──
-    if is_pro:
-        poly_raw = d.get("polymarket_data", "—")
-        if poly_raw and poly_raw != "—" and isinstance(poly_raw, str) and poly_raw.startswith("["):
-            try:
-                import ast
-                poly_markets = ast.literal_eval(poly_raw)
-                if isinstance(poly_markets, list) and len(poly_markets) > 0:
-                    _poly_title = "── POLYMARKET (PRO) ──" if lang == "ru" else "── POLYMARKET (PRO) ──"
-                    lines.append("")
-                    lines.append(_poly_title)
-                    _poly_desc = "На что ставят деньгами:" if lang == "ru" else "What money is betting on:"
-                    lines.append(f"<i>{_poly_desc}</i>")
-                    for pm in poly_markets[:3]:
-                        _q = pm.get("question", "")
-                        _pct = pm.get("yes_pct", 0)
-                        _vol = pm.get("volume", "")
-                        lines.append(f"  🎯 {_q} — <b>{_pct}%</b> ({_vol})")
-            except Exception:
-                pass
 
     lines.append("")
     lines.append("⚡ <b>Zender Terminal</b>")
