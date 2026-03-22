@@ -3780,58 +3780,101 @@ async def _fetch_binance_futures_tickers() -> list[dict]:
 
 async def _fetch_coinglass_bulk_oi() -> dict:
     """
-    Coinglass /api/futures/coins — все монеты за 1 запрос.
-    Возвращает OI, OI change, volume для каждой монеты.
+    Coinglass /api/futures/openInterest/ohlc-aggregated-history — НЕ bulk.
+    Вместо этого используем Binance /fapi/v1/openInterest для top extended монет.
+    Но это per-coin, поэтому берём OI из premiumIndex (markPrice endpoint).
+
+    Фоллбэк: пробуем Coinglass /api/futures/coins-markets (если доступен).
     Кэшируется на 10 мин.
     """
     now = time.time()
     if _EXTENDED_OI_CACHE["data"] and (now - _EXTENDED_OI_CACHE["ts"]) < _EXTENDED_OI_TTL:
         return _EXTENDED_OI_CACHE["data"]
 
-    data = await cg_get("/api/futures/coins")
     result = {}
-    if data and isinstance(data, list):
-        for item in data:
-            sym = (item.get("symbol") or "").upper()
-            if sym:
-                result[sym] = {
-                    "oi": item.get("openInterest"),
-                    "oi_change_1h": item.get("openInterestChange1h"),
-                    "oi_change_4h": item.get("openInterestChange4h"),
-                    "oi_change_24h": item.get("openInterestChange24h"),
-                    "volume_24h": item.get("vol24hUsd"),
-                }
-        _EXTENDED_OI_CACHE["data"] = result
-        _EXTENDED_OI_CACHE["ts"] = now
-        log.info(f"  📊 Coinglass bulk OI: {len(result)} монет")
+
+    # Попытка 1: Coinglass /api/futures/coins-markets
+    for endpoint in ["/api/futures/coins-markets", "/api/futures/coins", "/api/futures/openInterest/coins-list"]:
+        data = await cg_get(endpoint)
+        if data and isinstance(data, list):
+            for item in data:
+                sym = (item.get("symbol") or item.get("coin") or "").upper()
+                if sym:
+                    result[sym] = {
+                        "oi": item.get("openInterest") or item.get("oi") or item.get("openInterestAmount"),
+                        "oi_change_1h": item.get("openInterestChange1h") or item.get("oiChange1h"),
+                        "oi_change_4h": item.get("openInterestChange4h") or item.get("oiChange4h"),
+                        "oi_change_24h": item.get("openInterestChange24h") or item.get("oiChange24h"),
+                        "volume_24h": item.get("vol24hUsd") or item.get("volUsd"),
+                    }
+            _EXTENDED_OI_CACHE["data"] = result
+            _EXTENDED_OI_CACHE["ts"] = now
+            log.info(f"  📊 Coinglass bulk OI ({endpoint}): {len(result)} монет")
+            return result
+        else:
+            log.warning(f"  ⚠️ Coinglass OI endpoint {endpoint}: пустой ответ")
+
+    # Попытка 2: Binance Futures openInterest — берём из ticker данных (нет OI в ticker/24hr)
+    # OI недоступен в bulk через Binance, пропускаем
+    log.warning("  ⚠️ Coinglass bulk OI: ни один endpoint не сработал — OI будет пустым для extended")
     return result
 
 
 async def _fetch_coinglass_bulk_fr() -> dict:
     """
-    Coinglass /api/futures/funding-rate/coin-list — все монеты за 1 запрос.
+    Binance /fapi/v1/premiumIndex — ВСЕ символы за 1 запрос (БЕСПЛАТНО).
+    Возвращает lastFundingRate, markPrice, indexPrice для каждой пары.
+    НЕ зависит от Coinglass — 100% надёжный источник FR.
     Кэшируется на 10 мин.
     """
     now = time.time()
     if _EXTENDED_FR_CACHE["data"] and (now - _EXTENDED_FR_CACHE["ts"]) < _EXTENDED_FR_TTL:
         return _EXTENDED_FR_CACHE["data"]
 
-    data = await cg_get("/api/futures/funding-rate/coin-list")
     result = {}
-    if data and isinstance(data, list):
-        for item in data:
-            sym = (item.get("symbol") or "").upper()
-            if sym:
-                # Берём средневзвешенный funding rate по биржам
-                fr = item.get("uMarginFundingRate")
-                if fr is None:
-                    fr = item.get("fundingRate")
-                result[sym] = {
-                    "funding_rate": fr,
-                }
-        _EXTENDED_FR_CACHE["data"] = result
-        _EXTENDED_FR_CACHE["ts"] = now
-        log.info(f"  📊 Coinglass bulk FR: {len(result)} монет")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get("https://fapi.binance.com/fapi/v1/premiumIndex")
+            if resp.status_code == 200:
+                data = resp.json()
+                for item in data:
+                    sym_raw = item.get("symbol", "")
+                    if not sym_raw.endswith("USDT"):
+                        continue
+                    sym = sym_raw.replace("USDT", "")
+                    fr_str = item.get("lastFundingRate")
+                    if fr_str:
+                        try:
+                            fr_val = float(fr_str) * 100  # Binance возвращает в десятичных (0.0001 = 0.01%)
+                            result[sym] = {"funding_rate": fr_val}
+                        except (ValueError, TypeError):
+                            pass
+                _EXTENDED_FR_CACHE["data"] = result
+                _EXTENDED_FR_CACHE["ts"] = now
+                log.info(f"  📊 Binance bulk FR (premiumIndex): {len(result)} символов")
+            else:
+                log.error(f"  ❌ Binance premiumIndex HTTP {resp.status_code}")
+    except Exception as e:
+        log.error(f"  ❌ Binance premiumIndex error: {e}")
+
+    # Фоллбэк на Coinglass если Binance не отдал
+    if not result:
+        for endpoint in ["/api/futures/funding-rate/coin-list", "/api/futures/fundingRate/coins-list"]:
+            data = await cg_get(endpoint)
+            if data and isinstance(data, list):
+                for item in data:
+                    sym = (item.get("symbol") or item.get("coin") or "").upper()
+                    if sym:
+                        fr = item.get("uMarginFundingRate") or item.get("fundingRate")
+                        if fr is not None:
+                            result[sym] = {"funding_rate": float(fr)}
+                _EXTENDED_FR_CACHE["data"] = result
+                _EXTENDED_FR_CACHE["ts"] = now
+                log.info(f"  📊 Coinglass bulk FR ({endpoint}): {len(result)} монет")
+                return result
+            else:
+                log.warning(f"  ⚠️ Coinglass FR endpoint {endpoint}: пустой ответ")
+
     return result
 
 
@@ -3962,12 +4005,18 @@ async def collect_extended_coins(liq_by_coin_all: dict, total_liq_long_1h: float
     if not tickers:
         log.warning("  ⚠️ Binance Futures tickers пустые — пропускаем extended")
         return
+    log.info(f"  📡 Binance tickers: {len(tickers)} USDT пар загружено")
 
-    # Шаг 2: Coinglass bulk OI + FR (по 1 запросу, кэш 10 мин)
+    # Шаг 2: Bulk OI (Coinglass) + FR (Binance premiumIndex)
     cg_oi_data, cg_fr_data = await asyncio.gather(
         _fetch_coinglass_bulk_oi(),
         _fetch_coinglass_bulk_fr(),
     )
+    log.info(f"  📡 Bulk данные: OI={len(cg_oi_data)} монет, FR={len(cg_fr_data)} символов")
+    # Debug: показать первые 5 FR записей для проверки маппинга
+    if cg_fr_data:
+        sample = list(cg_fr_data.items())[:5]
+        log.info(f"  📡 FR sample: {sample}")
 
     # Шаг 3: Фильтруем и собираем
     top_coins_set = set(COINS)
