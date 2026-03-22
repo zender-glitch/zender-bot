@@ -167,5 +167,41 @@ class Database:
 
         return result
 
+    async def get_all_coins_list(self) -> list[dict]:
+        """
+        Получить список ВСЕХ монет из market_data (для поиска / сканера Pro).
+        Возвращает: [{coin, price, change, ai_score, ai_score_label, signal_label, data_tier, updated_at}, ...]
+        Сортировка по ai_score DESC.
+        """
+        try:
+            res = (
+                self.client.table("market_data")
+                .select("coin, price, change, ai_score, ai_score_label, signal_label, data_tier, updated_at, recommendation, spot_volume")
+                .order("ai_score", desc=True)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            log.warning(f"get_all_coins_list: {e}")
+            return []
+
+    async def search_coins(self, query: str) -> list[dict]:
+        """
+        Поиск монет по тикеру (ILIKE). Для Pro пользователей.
+        Возвращает до 10 результатов.
+        """
+        try:
+            res = (
+                self.client.table("market_data")
+                .select("*")
+                .ilike("coin", f"%{query.upper()}%")
+                .limit(10)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            log.warning(f"search_coins: {e}")
+            return []
+
 
 db = Database()

@@ -3740,6 +3740,338 @@ async def fetch_whale_transactions() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# РАСШИРЕННЫЙ СБОР: 250 МОНЕТ (Pro tier)
+# Только BULK API — без per-coin запросов, без LLM, без увеличения расходов
+# Binance Futures (1 req) + Coinglass liquidation (уже загружены) + auto-scoring
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Топ-250 Binance Futures символов (USDT perpetuals) — фильтруем из bulk ответа
+# Минимальный объём $1M/24h чтобы не показывать мёртвые пары
+EXTENDED_MIN_VOLUME_USD = 1_000_000
+
+# Кэш для OI данных из Coinglass (bulk, 1 запрос на все монеты)
+_EXTENDED_OI_CACHE = {"data": {}, "ts": 0.0}
+_EXTENDED_OI_TTL = 10 * 60  # 10 минут
+
+# Кэш для Funding Rate данных из Coinglass (bulk)
+_EXTENDED_FR_CACHE = {"data": {}, "ts": 0.0}
+_EXTENDED_FR_TTL = 10 * 60
+
+
+async def _fetch_binance_futures_tickers() -> list[dict]:
+    """
+    Binance Futures /fapi/v1/ticker/24hr — ВСЕ пары за 1 запрос.
+    Возвращает ~300 USDT perpetual пар: symbol, lastPrice, priceChangePercent, volume, quoteVolume.
+    БЕСПЛАТНО, без ключа, без лимитов (вес 40, лимит 2400/мин).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get("https://fapi.binance.com/fapi/v1/ticker/24hr")
+            if resp.status_code != 200:
+                log.error(f"  ❌ Binance Futures ticker HTTP {resp.status_code}")
+                return []
+            data = resp.json()
+            # Фильтруем только USDT пары
+            return [t for t in data if t.get("symbol", "").endswith("USDT")]
+    except Exception as e:
+        log.error(f"  ❌ Binance Futures ticker error: {e}")
+        return []
+
+
+async def _fetch_coinglass_bulk_oi() -> dict:
+    """
+    Coinglass /api/futures/coins — все монеты за 1 запрос.
+    Возвращает OI, OI change, volume для каждой монеты.
+    Кэшируется на 10 мин.
+    """
+    now = time.time()
+    if _EXTENDED_OI_CACHE["data"] and (now - _EXTENDED_OI_CACHE["ts"]) < _EXTENDED_OI_TTL:
+        return _EXTENDED_OI_CACHE["data"]
+
+    data = await cg_get("/api/futures/coins")
+    result = {}
+    if data and isinstance(data, list):
+        for item in data:
+            sym = (item.get("symbol") or "").upper()
+            if sym:
+                result[sym] = {
+                    "oi": item.get("openInterest"),
+                    "oi_change_1h": item.get("openInterestChange1h"),
+                    "oi_change_4h": item.get("openInterestChange4h"),
+                    "oi_change_24h": item.get("openInterestChange24h"),
+                    "volume_24h": item.get("vol24hUsd"),
+                }
+        _EXTENDED_OI_CACHE["data"] = result
+        _EXTENDED_OI_CACHE["ts"] = now
+        log.info(f"  📊 Coinglass bulk OI: {len(result)} монет")
+    return result
+
+
+async def _fetch_coinglass_bulk_fr() -> dict:
+    """
+    Coinglass /api/futures/funding-rate/coin-list — все монеты за 1 запрос.
+    Кэшируется на 10 мин.
+    """
+    now = time.time()
+    if _EXTENDED_FR_CACHE["data"] and (now - _EXTENDED_FR_CACHE["ts"]) < _EXTENDED_FR_TTL:
+        return _EXTENDED_FR_CACHE["data"]
+
+    data = await cg_get("/api/futures/funding-rate/coin-list")
+    result = {}
+    if data and isinstance(data, list):
+        for item in data:
+            sym = (item.get("symbol") or "").upper()
+            if sym:
+                # Берём средневзвешенный funding rate по биржам
+                fr = item.get("uMarginFundingRate")
+                if fr is None:
+                    fr = item.get("fundingRate")
+                result[sym] = {
+                    "funding_rate": fr,
+                }
+        _EXTENDED_FR_CACHE["data"] = result
+        _EXTENDED_FR_CACHE["ts"] = now
+        log.info(f"  📊 Coinglass bulk FR: {len(result)} монет")
+    return result
+
+
+def _auto_score_extended(price_change: float, oi_change: float | None,
+                         liq_long: float | None, liq_short: float | None,
+                         funding_rate: float | None, volume_usd: float | None) -> dict:
+    """
+    Автоскоринг для расширенных монет (230+) — НЕ используя LLM.
+    Формула на основе доступных bulk данных:
+    - price_change: % за 24ч
+    - oi_change: % за 1ч (или 4ч)
+    - liq_long/liq_short: ликвидации лонгов/шортов в USD
+    - funding_rate: текущий FR
+    - volume_usd: объём за 24ч
+
+    Возвращает: ai_score (0-100), ai_score_label, recommendation, signal_bar, signal_label
+    """
+    score = 50  # Нейтральная база
+
+    # 1. Price momentum (±15 баллов)
+    if price_change is not None:
+        if price_change > 10:
+            score += 15
+        elif price_change > 5:
+            score += 10
+        elif price_change > 2:
+            score += 5
+        elif price_change > 0:
+            score += 2
+        elif price_change > -2:
+            score -= 2
+        elif price_change > -5:
+            score -= 5
+        elif price_change > -10:
+            score -= 10
+        else:
+            score -= 15
+
+    # 2. OI change — рост OI при росте цены = сильный тренд (±10 баллов)
+    if oi_change is not None and price_change is not None:
+        if oi_change > 5 and price_change > 0:
+            score += 10  # OI растёт + цена растёт = бычий
+        elif oi_change > 5 and price_change < 0:
+            score -= 5   # OI растёт + цена падает = шорты давят
+        elif oi_change < -5 and price_change > 0:
+            score += 3   # OI падает + цена растёт = шорт сквиз
+        elif oi_change < -5 and price_change < 0:
+            score -= 8   # OI падает + цена падает = капитуляция
+
+    # 3. Ликвидации — перекос = сигнал (±8 баллов)
+    if liq_long and liq_short and (liq_long + liq_short) > 0:
+        liq_ratio = liq_long / (liq_long + liq_short)
+        if liq_ratio > 0.7:
+            score -= 8  # Ликвидируют лонги = медвежий
+        elif liq_ratio < 0.3:
+            score += 8  # Ликвидируют шорты = бычий
+
+    # 4. Funding rate — экстремальные значения (±5 баллов)
+    if funding_rate is not None:
+        try:
+            fr = float(funding_rate)
+            if fr > 0.05:
+                score -= 5  # Очень высокий FR = перегрев лонгов
+            elif fr > 0.02:
+                score -= 2
+            elif fr < -0.02:
+                score += 3  # Отрицательный FR = потенциал роста
+            elif fr < -0.05:
+                score += 5
+        except (ValueError, TypeError):
+            pass
+
+    # Нормализуем в 0-100
+    ai_score = max(0, min(100, round(score)))
+
+    # Лейбл
+    if ai_score >= 70:
+        ai_score_label = "STRONG BUY"
+        recommendation = "BUY"
+        signal_label = "STRONG BUY"
+        signal_bar = "🟢🟢🟢🟢🟢"
+    elif ai_score >= 60:
+        ai_score_label = "BUY"
+        recommendation = "BUY"
+        signal_label = "BUY"
+        signal_bar = "🟢🟢🟢🟢⬜"
+    elif ai_score >= 45:
+        ai_score_label = "NEUTRAL"
+        recommendation = "WAIT"
+        signal_label = "NEUTRAL"
+        signal_bar = "🟡🟡🟡⬜⬜"
+    elif ai_score >= 30:
+        ai_score_label = "SELL"
+        recommendation = "SELL"
+        signal_label = "SELL"
+        signal_bar = "🔴🔴🔴⬜⬜"
+    else:
+        ai_score_label = "STRONG SELL"
+        recommendation = "SELL"
+        signal_label = "STRONG SELL"
+        signal_bar = "🔴🔴🔴🔴🔴"
+
+    return {
+        "ai_score": ai_score,
+        "ai_score_label": ai_score_label,
+        "recommendation": recommendation,
+        "signal_bar": signal_bar,
+        "signal_label": signal_label,
+    }
+
+
+async def collect_extended_coins(liq_by_coin_all: dict, total_liq_long_1h: float, total_liq_short_1h: float, fg_data: dict):
+    """
+    Собирает данные для 230+ дополнительных монет (помимо top-20 COINS).
+    Использует ТОЛЬКО bulk API (3-4 запроса на ВСЕ монеты):
+    1. Binance Futures /fapi/v1/ticker/24hr — цена, change, volume (1 запрос, бесплатно)
+    2. Coinglass /api/futures/coins — OI, OI change (1 запрос, уже в плане Hobbyist)
+    3. Coinglass /api/futures/funding-rate/coin-list — FR (1 запрос)
+    4. Ликвидации — уже загружены (liq_by_coin_all)
+
+    НЕ использует: LLM, per-coin запросы, платные API.
+    Стоимость: 0 дополнительных долларов (Binance бесплатно, Coinglass в рамках плана).
+    """
+    log.info("  📡 Расширенный сбор: загружаем 250 монет (bulk APIs)...")
+
+    # Шаг 1: Binance Futures — все тикеры за 1 запрос
+    tickers = await _fetch_binance_futures_tickers()
+    if not tickers:
+        log.warning("  ⚠️ Binance Futures tickers пустые — пропускаем extended")
+        return
+
+    # Шаг 2: Coinglass bulk OI + FR (по 1 запросу, кэш 10 мин)
+    cg_oi_data, cg_fr_data = await asyncio.gather(
+        _fetch_coinglass_bulk_oi(),
+        _fetch_coinglass_bulk_fr(),
+    )
+
+    # Шаг 3: Фильтруем и собираем
+    top_coins_set = set(COINS)
+    extended_count = 0
+    skipped_low_vol = 0
+
+    # Сортируем по объёму (самые ликвидные сверху)
+    tickers.sort(key=lambda t: float(t.get("quoteVolume", 0)), reverse=True)
+
+    # Берём до 250 монет (минус top-20 = до 230 дополнительных)
+    max_extended = 250 - len(COINS)
+
+    for ticker in tickers:
+        if extended_count >= max_extended:
+            break
+
+        raw_symbol = ticker.get("symbol", "")
+        # Извлекаем символ монеты: BTCUSDT → BTC
+        if not raw_symbol.endswith("USDT"):
+            continue
+        coin_symbol = raw_symbol.replace("USDT", "")
+
+        # Пропускаем top-20 (они уже собраны с полным анализом)
+        if coin_symbol in top_coins_set:
+            continue
+
+        # Фильтр по объёму — минимум $1M/24h
+        try:
+            volume_usd = float(ticker.get("quoteVolume", 0))
+        except (ValueError, TypeError):
+            volume_usd = 0
+        if volume_usd < EXTENDED_MIN_VOLUME_USD:
+            skipped_low_vol += 1
+            continue
+
+        # Цена и изменение
+        try:
+            price = float(ticker.get("lastPrice", 0))
+            change_24h = float(ticker.get("priceChangePercent", 0))
+        except (ValueError, TypeError):
+            continue
+
+        if price <= 0:
+            continue
+
+        # OI данные из Coinglass (bulk)
+        cg_coin = cg_oi_data.get(coin_symbol, {})
+        oi_val = cg_coin.get("oi")
+        oi_change = cg_coin.get("oi_change_1h") or cg_coin.get("oi_change_4h")
+
+        # FR данные из Coinglass (bulk)
+        fr_coin = cg_fr_data.get(coin_symbol, {})
+        funding_rate = fr_coin.get("funding_rate")
+
+        # Ликвидации (уже загружены в основном цикле)
+        liq_data = liq_by_coin_all.get(coin_symbol, {})
+        liq_long = liq_data.get("liq_long")
+        liq_short = liq_data.get("liq_short")
+
+        # Автоскоринг
+        scoring = _auto_score_extended(change_24h, oi_change, liq_long, liq_short, funding_rate, volume_usd)
+
+        # Формируем запись для Supabase (облегчённая — без LLM полей)
+        record = {
+            "coin": coin_symbol,
+            "price": fmt_price(price),
+            "change": fmt_pct(change_24h),
+            "oi": fmt_usd(oi_val) if oi_val else "—",
+            "oi_raw": oi_val,
+            "oi_change": fmt_pct(oi_change),
+            "funding_rate": fmt_fr(funding_rate),
+            "long_pct": "—",
+            "short_pct": "—",
+            "long_vol": "—",
+            "short_vol": "—",
+            "liq_up": fmt_usd(liq_short),
+            "liq_dn": fmt_usd(liq_long),
+            "mkt_liq_long": fmt_usd(total_liq_long_1h),
+            "mkt_liq_short": fmt_usd(total_liq_short_1h),
+            "fear_greed": str(fg_data.get("fear_greed", "—")),
+            "fear_greed_label": fg_data.get("fear_greed_label", "—"),
+            "signal": scoring["signal_bar"],
+            "label": scoring["signal_label"],
+            "signal_label": scoring["signal_label"],
+            "ai_score": str(scoring["ai_score"]),
+            "ai_score_label": scoring["ai_score_label"],
+            "recommendation": scoring["recommendation"],
+            "spot_volume": fmt_usd(volume_usd),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            # Метка: extended coin (для фильтрации в боте/дашборде)
+            "data_tier": "extended",
+        }
+
+        try:
+            await db.upsert_market_data(record)
+            extended_count += 1
+        except Exception as e:
+            log.error(f"  ❌ Extended {coin_symbol} upsert error: {e}")
+            continue
+
+    log.info(f"  ✅ Расширенный сбор: {extended_count} монет сохранено | {skipped_low_vol} пропущено (low volume)")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ГЛАВНАЯ ФУНКЦИЯ СБОРА
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -3815,8 +4147,8 @@ async def collect_all():
             except (ValueError, TypeError):
                 pass
 
-            # Сохраняем по нашим монетам — 1ч (фоллбэк на 4ч)
-            if sym in COINS:
+            # Сохраняем по ВСЕМ монетам (для top-20 + extended 230) — 1ч (фоллбэк на 4ч)
+            if sym:
                 liq_long = item.get("long_liquidation_usd_1h")
                 liq_short = item.get("short_liquidation_usd_1h")
                 if liq_long is None:
@@ -4094,6 +4426,8 @@ async def collect_all():
                 "buy_zone": llm_data.get("buy_zone", ""),
                 "sell_zone": llm_data.get("sell_zone", ""),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
+                # Метка: full analysis (top-20 с LLM + pipeline)
+                "data_tier": "full",
             }
 
             # Если LLM не запускался в этом цикле — не перезаписываем LLM-поля в БД
@@ -4111,7 +4445,15 @@ async def collect_all():
             log.error(f"  ❌ {symbol} error: {e}")
             continue
 
-    log.info("📡 Сбор данных завершён.")
+    # ══ РАСШИРЕННЫЙ СБОР: 250 монет (Pro tier) ══
+    # Используем уже загруженные ликвидации (liq_by_coin) + fg_data
+    # Дополнительно: 1 Binance Futures запрос + 2 Coinglass bulk запроса
+    try:
+        await collect_extended_coins(liq_by_coin, total_liq_long_1h, total_liq_short_1h, fg_data)
+    except Exception as e:
+        log.error(f"  ❌ Extended coins collection error: {e}")
+
+    log.info("📡 Сбор данных завершён (top-20 + extended).")
 
 
 async def collector_loop(interval_minutes: int = 15):

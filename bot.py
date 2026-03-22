@@ -58,8 +58,7 @@ TEXTS = {
 <b>Тарифы:</b>
 🆓 <b>Free</b> — 1 монета · LLM-анализ · обновление 15 мин
 🟢 <b>Basic $14</b> — топ-20 монет · LLM-анализ · 5/15/60 мин
-🟡 <b>Pro $29</b> — все метрики · дашборд · 3 темы · без LLM
-🔴 <b>Pro+ $49</b> — алерты 1-2 мин · сканер 200 монет
+🟡 <b>Pro $29</b> — 250 монет · дашборд · полный AI-анализ · поиск
 
 Используй кнопки ниже 👇""",
 
@@ -128,8 +127,7 @@ Santiment · Deribit · Nansen · и ещё 20+ сервисов
         "sub_title": "💳 Выбери тариф",
         "sub_free": '🆓 <b>Free</b> — 1 монета, LLM-анализ, 15 мин',
         "sub_basic": '🟢 <b>Basic $14/мес</b> — топ-20, LLM-анализ, 5/15/60 мин',
-        "sub_pro": '🟡 <b>Pro $29/мес</b> — все метрики, дашборд, 3 темы',
-        "sub_pro_plus": '🔴 <b>Pro+ $49/мес</b> — алерты 1-2 мин, сканер 200 монет',
+        "sub_pro": '🟡 <b>Pro $29/мес</b> — 250 монет, дашборд, полный AI-анализ, поиск',
         "payment_soon": "💳 Оплата {name} {price} — скоро будет доступно!",
 
         # Статус
@@ -486,8 +484,7 @@ Trader pays $14/mo instead of $200–800+ separately.
 <b>Plans:</b>
 🆓 <b>Free</b> — 1 coin · LLM analysis · 15 min refresh
 🟢 <b>Basic $14</b> — top-20 coins · LLM analysis · 5/15/60 min
-🟡 <b>Pro $29</b> — all metrics · dashboard · 3 themes · no LLM
-🔴 <b>Pro+ $49</b> — 1-2 min alerts · 200 coin scanner
+🟡 <b>Pro $29</b> — 250 coins · dashboard · full AI analysis · search
 
 Use the buttons below 👇""",
 
@@ -556,8 +553,7 @@ What PRO view gives you:
         "sub_title": "💳 Choose a plan",
         "sub_free": '🆓 <b>Free</b> — 1 coin, LLM analysis, 15 min',
         "sub_basic": '🟢 <b>Basic $14/mo</b> — top-20, LLM analysis, 5/15/60 min',
-        "sub_pro": '🟡 <b>Pro $29/mo</b> — all metrics, dashboard, 3 themes',
-        "sub_pro_plus": '🔴 <b>Pro+ $49/mo</b> — 1-2 min alerts, 200 coin scanner',
+        "sub_pro": '🟡 <b>Pro $29/mo</b> — 250 coins, dashboard, full AI analysis, search',
         "payment_soon": "💳 Payment {name} {price} — coming soon!",
 
         # Status
@@ -1008,6 +1004,7 @@ def kb_radar(page: int = 0, lang: str = "ru", data: dict = None):
         InlineKeyboardButton(text="🚨 Danger", callback_data="danger"),
     ])
     rows.append([
+        InlineKeyboardButton(text="🚀 Top 250", callback_data="top_movers"),
         InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1849,6 +1846,81 @@ def kb_danger(lang: str = "ru"):
             InlineKeyboardButton(text=t("btn_settings", lang), callback_data="settings"),
         ],
     ])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ПОИСК МОНЕТ (Pro: 250 монет)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def text_search_results(results: list[dict], query: str, lang: str = "ru") -> str:
+    """Текст результатов поиска по монетам."""
+    _title = "🔍 Поиск" if lang == "ru" else "🔍 Search"
+    if not results:
+        _empty = "Ничего не найдено" if lang == "ru" else "No results found"
+        return f"<b>{_title}: {query.upper()}</b>\n\n{_empty}"
+
+    lines = [f"<b>{_title}: {query.upper()}</b>\n"]
+    for r in results[:10]:
+        coin = r.get("coin", "?")
+        price = r.get("price", "—")
+        change = r.get("change", "—")
+        score = r.get("ai_score", "—")
+        label = r.get("ai_score_label", "—")
+        tier = r.get("data_tier", "extended")
+        tier_icon = "⭐" if tier == "full" else "📊"
+        lines.append(f"{tier_icon} <b>{coin}</b> — {price} ({change}) | AI: {score} {label}")
+
+    _hint = "Нажми на монету для подробностей" if lang == "ru" else "Tap coin for details"
+    lines.append(f"\n<i>{_hint}</i>")
+    return "\n".join(lines)
+
+
+def kb_search_results(results: list[dict], lang: str = "ru"):
+    """Кнопки результатов поиска — каждая монета как кнопка."""
+    rows = []
+    chunk = []
+    for r in results[:10]:
+        coin = r.get("coin", "?")
+        chunk.append(InlineKeyboardButton(text=coin, callback_data=f"coin_{coin}"))
+        if len(chunk) == 5:
+            rows.append(chunk)
+            chunk = []
+    if chunk:
+        rows.append(chunk)
+    rows.append([
+        InlineKeyboardButton(text="📡 Радар", callback_data="radar"),
+        InlineKeyboardButton(text="🔎 Сканер", callback_data="scanner"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def text_top_movers(coins_list: list[dict], lang: str = "ru") -> str:
+    """Текст топ-муверов из всех 250 монет (для Pro сканера)."""
+    _title = "🚀 Топ-муверы (250 монет)" if lang == "ru" else "🚀 Top Movers (250 coins)"
+    lines = [f"<b>{_title}</b>\n"]
+
+    # Сортируем по change (абсолютному значению)
+    sorted_coins = sorted(coins_list, key=lambda c: abs(float(c.get("change", "0").replace("%", "").replace("+", "").replace("—", "0") or "0")), reverse=True)
+
+    # Топ-10 gainers
+    gainers = [c for c in sorted_coins if float(c.get("change", "0").replace("%", "").replace("+", "").replace("—", "0") or "0") > 0][:5]
+    losers = [c for c in sorted_coins if float(c.get("change", "0").replace("%", "").replace("+", "").replace("—", "0") or "0") < 0][:5]
+
+    if gainers:
+        _g = "📈 Рост:" if lang == "ru" else "📈 Gainers:"
+        lines.append(f"\n{_g}")
+        for c in gainers:
+            lines.append(f"  🟢 <b>{c['coin']}</b> {c.get('price','—')} ({c.get('change','—')})")
+
+    if losers:
+        _l = "📉 Падение:" if lang == "ru" else "📉 Losers:"
+        lines.append(f"\n{_l}")
+        for c in losers:
+            lines.append(f"  🔴 <b>{c['coin']}</b> {c.get('price','—')} ({c.get('change','—')})")
+
+    _hint = "Отправь тикер для поиска: DOGE, PEPE, WIF..." if lang == "ru" else "Send a ticker to search: DOGE, PEPE, WIF..."
+    lines.append(f"\n<i>💡 {_hint}</i>")
+    return "\n".join(lines)
 
 
 def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str = "basic") -> str:
@@ -3511,14 +3583,18 @@ async def cmd_summary(message: Message):
 
 
 # Команды-тикеры: /BTC, /ETH, /RUNE и т.д. — быстрый вход в карточку монеты
-@dp.message(F.text.regexp(r"^/([A-Za-z]{2,5})$"))
+@dp.message(F.text.regexp(r"^/([A-Za-z]{2,10})$"))
 async def cmd_coin_shortcut(message: Message):
-    """Быстрый вход в карточку монеты по команде /BTC, /ETH и т.д."""
+    """Быстрый вход в карточку монеты по команде /BTC, /ETH, /PEPE и т.д."""
     try:
-        # Извлекаем тикер из команды: /btc → BTC, /rune → RUNE
+        # Извлекаем тикер из команды: /btc → BTC, /rune → RUNE, /pepe → PEPE
         coin = message.text.strip("/").split()[0].upper()
+        # Проверяем: top-20 или extended (ищем в БД)
         if coin not in COINS:
-            return
+            # Попробуем найти среди extended монет
+            search_res = await db.search_coins(coin)
+            if not search_res or search_res[0].get("coin") != coin:
+                return  # Неизвестная монета
         lang = await get_user_lang(message.from_user.id)
         view_mode = await db.get_view_mode(message.from_user.id)
         # Определяем страницу этой монеты
@@ -3725,12 +3801,12 @@ async def cb_coin(call: CallbackQuery):
     lang = await get_user_lang(call.from_user.id)
     view_mode = await db.get_view_mode(call.from_user.id)
     coin = call.data.replace("coin_", "")
-    # Определяем страницу этой монеты
+    # Определяем страницу этой монеты (для extended монет — page 0)
     try:
         idx = COINS.index(coin)
         page = idx // COINS_PER_PAGE
     except ValueError:
-        page = 0
+        page = 0  # extended coin — не в основном списке
     # Pro: загружаем и BTC для глобальных макро-данных
     coins_to_load = [coin] if (coin == "BTC" or view_mode != "pro") else [coin, "BTC"]
     data = await db.get_market_data(coins_to_load)
@@ -4108,6 +4184,72 @@ async def alert_loop():
         except Exception as e:
             log.error(f"Alert loop error: {e}")
         await asyncio.sleep(60)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ПОИСК МОНЕТ — текстовый ввод (Pro: 250 монет)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dp.callback_query(F.data == "top_movers")
+async def cb_top_movers(call: CallbackQuery):
+    """Показать топ-муверы из всех 250 монет."""
+    lang = await get_user_lang(call.from_user.id)
+    all_coins = await db.get_all_coins_list()
+    if not all_coins:
+        await call.answer("No data yet")
+        return
+    await call.message.edit_text(
+        text_top_movers(all_coins, lang),
+        parse_mode=ParseMode.HTML,
+        link_preview_options=NO_PREVIEW,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📡 Радар", callback_data="radar"),
+             InlineKeyboardButton(text="🔎 Сканер", callback_data="scanner")],
+        ])
+    )
+    await call.answer()
+
+
+@dp.message(F.text.regexp(r"^[A-Za-z]{2,10}$"))
+async def msg_search_coin(message: Message):
+    """
+    Поиск монеты по тикеру.
+    Если юзер отправляет просто текст из 2-10 букв (без /) — ищем среди 250 монет.
+    """
+    query = message.text.strip().upper()
+
+    # Не перехватываем служебные слова
+    _skip_words = {"OK", "HI", "YES", "NO", "DA", "NET", "RU", "EN", "HELP", "MENU", "START"}
+    if query in _skip_words:
+        return
+
+    lang = await get_user_lang(message.from_user.id)
+
+    # Сначала проверяем в top-20
+    if query in COINS:
+        view_mode = await db.get_view_mode(message.from_user.id)
+        idx = COINS.index(query)
+        page = idx // COINS_PER_PAGE
+        coins_to_load = [query] if (query == "BTC" or view_mode != "pro") else [query, "BTC"]
+        data = await db.get_market_data(coins_to_load)
+        await message.answer(
+            text_coin_analysis(query, data, lang, view_mode=view_mode),
+            parse_mode=ParseMode.HTML,
+            link_preview_options=NO_PREVIEW,
+            reply_markup=kb_coin_detail(query, page=page, lang=lang, view_mode=view_mode, data=data)
+        )
+        return
+
+    # Ищем среди всех 250 монет
+    results = await db.search_coins(query)
+    if results:
+        await message.answer(
+            text_search_results(results, query, lang),
+            parse_mode=ParseMode.HTML,
+            link_preview_options=NO_PREVIEW,
+            reply_markup=kb_search_results(results, lang)
+        )
+    # Если не нашли — молчим (не спамим ошибками на каждое слово)
 
 
 async def main():
