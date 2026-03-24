@@ -2818,7 +2818,7 @@ async def generate_pro_analysis(symbol: str, coin_data: dict, pipeline: dict, la
 
 ДАННЫЕ {symbol}:
 - Цена: ${safe_usd(price)}, 24ч: {safe_pct(change)}
-- Funding Rate: {safe_pct(fr)}
+- Funding Rate: {safe_pct(fr)} ({'ЛОНГИ ПЛАТЯТ ШОРТАМ — перегрев лонгов' if fr and float(fr) > 0 else 'ШОРТЫ ПЛАТЯТ ЛОНГАМ — перегрев шортов' if fr and float(fr) < 0 else 'нейтральный'})
 - OI: {safe_usd(oi)}, изменение 1ч: {safe_pct(oi_change)}
 - Покупатели/Продавцы: {long_pct or '?'}% / {short_pct or '?'}%
 - RSI: {rsi or '?'}, MACD: {safe_pct(macd)}
@@ -2844,13 +2844,14 @@ async def generate_pro_analysis(symbol: str, coin_data: dict, pipeline: dict, la
 - НЕ используй технические термины вроде RSI/MACD/SOPR — объясняй простыми словами
 - НЕ повторяй одни и те же фразы типа "покупатели давят" или "ловушка для шортов" — каждый раз формулируй УНИКАЛЬНО
 - Без звёздочек, без markdown, без заголовков
-- Максимум 600 символов"""
+- ВАЖНО: каждое предложение ЗАКАНЧИВАЙ ТОЧКОЙ. Не обрывай мысль на середине.
+- Максимум 800 символов"""
     else:
         prompt = f"""You are a professional crypto analyst. Write a DETAILED breakdown of {symbol} for a trader.
 
 {symbol} DATA:
 - Price: ${safe_usd(price)}, 24h: {safe_pct(change)}
-- Funding Rate: {safe_pct(fr)}
+- Funding Rate: {safe_pct(fr)} ({'LONGS PAY SHORTS — longs overloaded' if fr and float(fr) > 0 else 'SHORTS PAY LONGS — shorts overloaded' if fr and float(fr) < 0 else 'neutral'})
 - OI: {safe_usd(oi)}, 1h change: {safe_pct(oi_change)}
 - Buyers/Sellers: {long_pct or '?'}% / {short_pct or '?'}%
 - RSI: {rsi or '?'}, MACD: {safe_pct(macd)}
@@ -2864,7 +2865,7 @@ async def generate_pro_analysis(symbol: str, coin_data: dict, pipeline: dict, la
 - Algorithm recommendation: {recommendation} ({strength})
 
 Write 4-6 sentences: what's happening, why, key levels/risks, what to expect.
-Use SPECIFIC numbers. No RSI/MACD jargon. Max 600 chars. No markdown."""
+Use SPECIFIC numbers. No RSI/MACD jargon. Max 800 chars. No markdown. IMPORTANT: end every sentence with a period."""
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -2877,7 +2878,7 @@ Use SPECIFIC numbers. No RSI/MACD jargon. Max 600 chars. No markdown."""
                 },
                 json={
                     "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 700,
+                    "max_tokens": 1000,
                     "temperature": 0.3,
                     "messages": [{"role": "user", "content": prompt}],
                 },
@@ -2887,15 +2888,16 @@ Use SPECIFIC numbers. No RSI/MACD jargon. Max 600 chars. No markdown."""
                 text = data["content"][0]["text"].strip()
                 text = text.replace("**", "").replace("*", "").replace("__", "").replace("_", "")
                 # Always trim to last complete sentence
-                if len(text) > 800:
-                    cut = text[:800].rfind(".")
-                    text = text[:cut + 1] if cut > 100 else text[:797] + "..."
+                if len(text) > 900:
+                    cut = text[:900].rfind(".")
+                    text = text[:cut + 1] if cut > 200 else text[:897] + "..."
                 elif not text.endswith(".") and not text.endswith("!") and not text.endswith("?"):
                     # Incomplete sentence — trim to last period
                     cut = text.rfind(".")
-                    if cut > len(text) * 0.5:
+                    if cut > len(text) * 0.4:
                         text = text[:cut + 1]
-                    text = text[:cut + 1] if cut > 100 else text[:697] + "..."
+                    else:
+                        text = text.rstrip() + "."
                 log.info(f"  🤖 Pro Analysis {symbol}: {len(text)} chars")
                 return text
             else:
