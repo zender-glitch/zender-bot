@@ -2576,8 +2576,14 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         else:
             if _has(liq_up):
                 lines.append(f"🟢 {t('liq_shorts', lang)}: <b>{liq_up}</b>")
+            else:
+                _no_data = "нет данных" if lang == "ru" else "no data"
+                lines.append(f"🟢 {t('liq_shorts', lang)}: <i>{_no_data}</i>")
             if _has(liq_dn):
                 lines.append(f"🔴 {t('liq_longs', lang)}: <b>{liq_dn}</b>")
+            else:
+                _no_data = "нет данных" if lang == "ru" else "no data"
+                lines.append(f"🔴 {t('liq_longs', lang)}: <i>{_no_data}</i>")
 
     # ── МАКРО (PRO, все монеты — данные глобальные, берём из BTC) ──
     if is_pro:
@@ -3091,6 +3097,21 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
                 elif _is_sell and _engine_bull_pct >= 55:
                     _conf = "⚠️ signal conflicts with market pressure" if lang == "en" else "⚠️ сигнал конфликтует с давлением рынка"
                     lines.append(_conf)
+
+                # ── Конфликт ENGINE vs ДАВЛЕНИЕ РЫНКА ──
+                try:
+                    _gauge_bull = int(float(str(prob_bull))) if prob_bull is not None else 50
+                    _gauge_bear = int(float(str(prob_bear))) if prob_bear is not None else 50
+                    _gauge_dir = "bull" if _gauge_bull >= _gauge_bear else "bear"
+                    _eng_dir = "bull" if _engine_bull_pct >= _engine_bear_pct else "bear"
+                    if _gauge_dir != _eng_dir and abs(_gauge_bull - _gauge_bear) > 10 and abs(_engine_bull_pct - _engine_bear_pct) > 10:
+                        if lang == "ru":
+                            _conflict_hint = "ℹ️ Давление рынка (вероятности AI) и Engine (метрики) расходятся — будь осторожен"
+                        else:
+                            _conflict_hint = "ℹ️ Market Pressure (AI probs) and Engine (metrics) diverge — be cautious"
+                        lines.append(_conflict_hint)
+                except (ValueError, TypeError):
+                    pass
 
                 # Топ причины (компактные)
                 _reasons = _pressure_reasons_ru if lang == "ru" else _pressure_reasons_en

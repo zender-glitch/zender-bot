@@ -3342,7 +3342,7 @@ def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict
         quality = "POOR"
         quality_label = "плохой"
 
-    # ── УВЕРЕННОСТЬ (на основе качества + согласия) ──
+    # ── УВЕРЕННОСТЬ (на основе количества данных + согласия) ──
     if total == 0:
         conf_level = 1
         conf_label = "нет данных"
@@ -3354,10 +3354,13 @@ def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict
         elif ratio >= 0.75 and agreement >= 4 and score >= 2:
             conf_level = 4
             conf_label = "высокая"
-        elif ratio >= 0.65 and agreement >= 3 and score >= 1:
+        elif ratio >= 0.65 and agreement >= 3:
+            # Убрали требование score >= 1: при SIDEWAYS score уходит в минус,
+            # но данных может быть достаточно для средней уверенности
             conf_level = 3
             conf_label = "средняя"
-        elif ratio >= 0.55 and score >= 0:
+        elif total >= 4:
+            # Достаточно данных — минимум 2 уровень, даже если нет ярко выраженного направления
             conf_level = 2
             conf_label = "ниже средней"
         else:
