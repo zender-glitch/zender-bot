@@ -1968,15 +1968,29 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
         try:
             ai_sc = int(float(str(ai_score_str)))
             _ai_title = "AI SCORE" if lang == "en" else "AI SCORE"
-            # Mood label — пояснение что значит число
+            # Mood label — согласован с реальным сигналом, а не только со score
+            # Если сигнал SELL/SHORT а score бычий — показываем "смешанный" чтобы не путать
+            _rec_low = recommendation.lower() if recommendation else ""
+            _is_sell_rec = any(x in _rec_low for x in ["продав", "sell", "short"])
+            _is_buy_rec = any(x in _rec_low for x in ["покуп", "buy", "long"])
+            _is_hold_rec = any(x in _rec_low for x in ["держ", "hold", "wait"])
+
             if lang == "en":
-                if ai_sc >= 80: _mood = "strong bullish"
+                if _is_sell_rec and ai_sc >= 55:
+                    _mood = "mixed (score bullish, trend bearish)"
+                elif _is_buy_rec and ai_sc < 45:
+                    _mood = "mixed (score bearish, setup bullish)"
+                elif ai_sc >= 80: _mood = "strong bullish"
                 elif ai_sc >= 60: _mood = "bullish"
                 elif ai_sc >= 45: _mood = "neutral"
                 elif ai_sc >= 20: _mood = "bearish"
                 else: _mood = "strong bearish"
             else:
-                if ai_sc >= 80: _mood = "сильный бычий"
+                if _is_sell_rec and ai_sc >= 55:
+                    _mood = "смешанный (score бычий, тренд медвежий)"
+                elif _is_buy_rec and ai_sc < 45:
+                    _mood = "смешанный (score медвежий, сетап бычий)"
+                elif ai_sc >= 80: _mood = "сильный бычий"
                 elif ai_sc >= 60: _mood = "бычий"
                 elif ai_sc >= 45: _mood = "нейтральный"
                 elif ai_sc >= 20: _mood = "медвежий"

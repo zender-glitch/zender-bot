@@ -3408,11 +3408,16 @@ def calculate_setup_quality(coin_data: dict, direction: dict, market_state: dict
     signal_bar = "🟩" * sig_normalized + "⬜" * (5 - sig_normalized)
     signal_label = strength.upper()
 
-    # Горизонт
+    # Горизонт — зависит от состояния И направления сигнала
     if state_code in ("BOUNCE", "SHORT_SQUEEZE", "LONG_SQUEEZE"):
         horizon = "4-12 часов"
     elif state_code in ("PANIC", "SHORT_OVERLOAD", "LONG_OVERLOAD"):
-        horizon = "краткосрочный отскок"
+        if recommendation == "продавать":
+            horizon = "краткосрок (давление вниз)"
+        elif recommendation == "покупать":
+            horizon = "краткосрок (отскок вверх)"
+        else:
+            horizon = "краткосрок (неопределённость)"
     elif state_code in ("ACCUMULATION", "DISTRIBUTION"):
         horizon = "среднесрочно"
     else:
