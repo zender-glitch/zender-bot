@@ -2617,10 +2617,7 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
 
                 if upper.startswith("ЧТО_ПРОИСХОДИТ:") or upper.startswith("ЧТО ПРОИСХОДИТ:"):
                     if val:
-                        clean_val = val.strip()
-                        if len(clean_val) > 120:
-                            clean_val = clean_val[:117] + "..."
-                        result["what_happening"] = clean_val
+                        result["what_happening"] = val.strip()
                 elif upper.startswith("ВХОД:"):
                     if val:
                         result["entry"] = val.strip().replace("[", "").replace("]", "")
@@ -2637,8 +2634,6 @@ async def generate_llm_analysis(symbol: str, coin_data: dict, pipeline: dict = N
                     clean = line.strip().lstrip("*").strip()
                     if len(clean) > 20 and not clean.upper().startswith(("ВХОД", "СТОП", "ЦЕЛЬ")):
                         result["what_happening"] = clean.split(":", 1)[1].strip() if ":" in clean else clean
-                        if len(result["what_happening"]) > 120:
-                            result["what_happening"] = result["what_happening"][:117] + "..."
                         break
 
             # Замена запрещённых англицизмов (LLM может игнорировать бан)
