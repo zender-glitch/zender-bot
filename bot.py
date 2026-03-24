@@ -2865,8 +2865,12 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     # ── ЧТО ПРОИСХОДИТ (короткий summary) ──
     llm_text = _clean(d.get("llm_text", ""))
     if what_happening:
-        # Ограничиваем до 280 символов для компактности
-        _wh = what_happening if len(what_happening) <= 280 else what_happening[:277] + "..."
+        # Ограничиваем до 400 символов, обрезаем на последнем целом предложении
+        if len(what_happening) <= 400:
+            _wh = what_happening
+        else:
+            _cut = what_happening[:400].rfind(".")
+            _wh = what_happening[:_cut + 1] if _cut > 100 else what_happening[:397] + "..."
         lines.append("")
         _wh_title = "SUMMARY" if lang == "en" else "ИТОГО"
         lines.append(f"<b>📋 {_wh_title}</b>")
