@@ -3853,15 +3853,22 @@ async def cb_coin(call: CallbackQuery):
         page = idx // COINS_PER_PAGE
     except ValueError:
         page = 0  # extended coin — не в основном списке
-    # Pro: загружаем и BTC для глобальных макро-данных
-    coins_to_load = [coin] if (coin == "BTC" or view_mode != "pro") else [coin, "BTC"]
-    data = await db.get_market_data(coins_to_load)
-    await call.message.edit_text(
-        text_coin_analysis(coin, data, lang, view_mode=view_mode),
-        parse_mode=ParseMode.HTML,
-        link_preview_options=NO_PREVIEW,
-        reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode, data=data)
-    )
+    try:
+        # Pro: загружаем и BTC для глобальных макро-данных
+        coins_to_load = [coin] if (coin == "BTC" or view_mode != "pro") else [coin, "BTC"]
+        data = await db.get_market_data(coins_to_load)
+        await call.message.edit_text(
+            text_coin_analysis(coin, data, lang, view_mode=view_mode),
+            parse_mode=ParseMode.HTML,
+            link_preview_options=NO_PREVIEW,
+            reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode, data=data)
+        )
+    except Exception as e:
+        log.error(f"cb_coin {coin} error: {e}")
+        await call.message.edit_text(
+            f"⚠️ Ошибка загрузки {coin}. Попробуйте позже.",
+            reply_markup=kb_coin_detail(coin, page=page, lang=lang, view_mode=view_mode)
+        )
     await call.answer()
 
 
