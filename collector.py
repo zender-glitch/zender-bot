@@ -100,6 +100,10 @@ COINS = [
     "RUNE",
 ]
 
+# Монеты с LLM-анализом (остальные — только данные, без AI текста)
+# TODO: вернуть все монеты когда пойдут платные подписки
+LLM_COINS = {"BTC", "ETH", "BNB", "SOL", "XRP"}
+
 # CoinGecko IDs
 COINGECKO_IDS = {
     "BTC": "bitcoin",
@@ -4339,9 +4343,9 @@ async def collect_all():
             liq_levels = calculate_liquidation_levels(coin_data)
 
             # LLM-анализ (получает pre-scored pipeline, только формулирует текст)
-            # LLM вызывается раз в LLM_INTERVAL_SEC (15 мин), данные — каждые 5 мин
+            # LLM только для LLM_COINS (экономия — остальные получают только данные)
             llm_data = {}
-            _do_llm = HAS_ANTHROPIC and coin_data.get("price") and coin_data.get("oi") and _run_llm_this_cycle
+            _do_llm = HAS_ANTHROPIC and coin_data.get("price") and coin_data.get("oi") and _run_llm_this_cycle and symbol in LLM_COINS
             if _do_llm:
                 llm_data = await generate_llm_analysis(symbol, coin_data, pipeline)
                 # Pro analysis — detailed text for paying users
