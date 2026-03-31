@@ -2865,7 +2865,7 @@ def text_coin_analysis(coin: str, data: dict, lang: str = "ru", view_mode: str =
     # ── ЧТО ПРОИСХОДИТ (короткий summary) ──
     llm_text = _clean(d.get("llm_text", ""))
     _LLM_COINS = {"BTC", "ETH", "BNB", "SOL", "XRP"}
-    if not what_happening and not llm_text and symbol not in _LLM_COINS:
+    if not what_happening and not llm_text and coin not in _LLM_COINS:
         lines.append("")
         _na_title = "🤖 AI-АНАЛИЗ" if lang == "ru" else "🤖 AI ANALYSIS"
         _na_text = "⏸ Временно недоступен для этой монеты" if lang == "ru" else "⏸ Temporarily unavailable for this coin"
